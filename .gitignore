@@ -30,3 +30,6 @@ runtime/*
 workspace.pid
 .DS_Store
 .vscode/
+
+# Workspace config (local, generated on first run)
+video-workspace.json
