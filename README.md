@@ -203,7 +203,20 @@ Anchor 是整个系统的"主角"抽象。它不是一张图，而是一组**可
 
 > 📄 完整创建/运行流程详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md)；对口型唱歌详见 [docs/guides/Singing_Video_Guide.md](docs/guides/Singing_Video_Guide.md)；口型+动作管线详见 [docs/guides/Dance_Pipeline.md](docs/guides/Dance_Pipeline.md)
 
-### 4. 时长对齐（pad_mode）
+### 4. 歌词时间戳（滚动歌词制作）
+
+对口型/口型+动作任务可为歌词逐句打时间戳，用于精确对口的滚动歌词生成。
+
+- 歌词框下方点「制作滚动歌词 >」打开编辑器，播放音视频后逐句打点（Enter 打点、↑/↓ 切句、空格播放/暂停）。
+- 点击已打点句子跳转定位；每句右侧「↺」重打这一句（从上一句播放，第一句从音频开头）。
+- 播放时自动定位到当前时间对应的已打点句子。
+- 时间戳保存在任务的 `lyrics_timestamps` 字段，格式 `[{ "text": "歌词", "time": 1.234 }]`。
+
+> ⚠️ **尚未集成到 prompt**：当前 `lyrics_timestamps` 仅由后端保存，**尚未参与 prompt 生成**。这一块的 prompt 组合逻辑仍待设计（如何把时间戳信息组织进对口型 prompt）。
+
+> 📄 歌词时间戳的完整交互说明详见 [docs/guides/Singing_Video_Guide.md](docs/guides/Singing_Video_Guide.md#歌词时间戳滚动歌词制作)
+
+### 5. 时长对齐（pad_mode）
 
 Seedance 的 `duration` 只接受整数秒，原始视频/音频往往是非整数时长。`pad_mode` 决定如何补足：
 
@@ -217,7 +230,7 @@ Seedance 的 `duration` 只接受整数秒，原始视频/音频往往是非整�
 
 > 📄 时长对齐的三种模式与设计思路详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md#时长处理)
 
-### 5. Prompt 分层架构（V2）
+### 6. Prompt 分层架构（V2）
 
 每次生成使用 7 层语义化 prompt：任务定位 → 参考分工 → 表演约束 → 保留要求 → 镜头策略 → 画质 → 自定义约束。系统会根据**是否有视频/音频参考**自动调整表演约束（如纯音频驱动时不依赖视频口型）。
 

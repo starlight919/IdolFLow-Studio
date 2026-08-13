@@ -851,10 +851,6 @@ export async function runPromptOptimizer() {
 
   if (!text) return toast('请先输入你的图文合成需求');
 
-  // Auto-expand the details panel
-  const panel = $('#optimizer-panel');
-  if (panel && panel.tagName === 'DETAILS') panel.open = true;
-
   btn.disabled = true;
   btn.textContent = '解析中…';
   sourceLabel.textContent = '';

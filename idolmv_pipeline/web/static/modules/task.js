@@ -2,7 +2,7 @@
 // ==========================================================================
 
 import store from './state.js';
-import { api, post } from './api.js';
+import { api, post, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
 import { $, $$, toast, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
 
 // ── Task Folder Relative Path ───────────────────────────────────────────────
@@ -19,23 +19,54 @@ function previewPath(file) {
   return `/api/file-preview?root=data_root&path=${encodeURIComponent(path)}`;
 }
 
+export function renderAssetChips(field) {
+  const container = $(`.asset-chips[data-field="${field}"]`);
+  if (!container) return;
+  const files = lines(`#${field}`);
+  if (!files.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = files.map((file) => {
+    const name = file.split('/').pop();
+    return `<span class="asset-chip" title="${escapeHtml(file)}">${escapeHtml(name)}<button type="button" class="chip-remove" data-type="${field}" data-file="${escapeAttr(file)}" title="取消选中">✕</button></span>`;
+  }).join('');
+}
+
 export function renderVideoAssetPreviews() {
+  renderAssetChips('anchors');
+  renderAssetChips('references');
   const anchorFiles = lines('#anchors');
   const referenceFiles = lines('#references');
 
   const anchorEl = $('#anchor-file-previews');
   if (anchorEl) {
     anchorEl.innerHTML = anchorFiles.length
-      ? anchorFiles.map((file) => `<figure><img src="${previewPath(file)}" loading="lazy" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22%3E✗%3C/text%3E%3C/svg%3E'"><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`).join('')
+      ? anchorFiles.map((file) => `<figure class="asset-figure"><img src="${previewPath(file)}" loading="lazy" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22%3E✗%3C/text%3E%3C/svg%3E'"><button type="button" class="asset-remove" data-type="anchors" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
 
   const refEl = $('#reference-file-previews');
   if (refEl) {
     refEl.innerHTML = referenceFiles.length
-      ? referenceFiles.map((file) => `<figure><video src="${previewPath(file)}#t=0.1" preload="metadata" muted onerror="console.error('Failed to load:',this.src)"></video><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`).join('')
+      ? referenceFiles.map((file) => {
+          const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file);
+          const media = isAudio
+            ? `<audio src="${previewPath(file)}" controls preload="metadata"></audio>`
+            : `<video src="${previewPath(file)}#t=0.1" preload="metadata" muted onerror="console.error('Failed to load:',this.src)"></video>`;
+          return `<figure class="asset-figure">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
+        }).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
+}
+
+export function removeVideoAsset(type, file) {
+  const target = type === 'anchors' ? '#anchors' : '#references';
+  const el = $(target);
+  if (!el) return;
+  const current = el.value.split('\n').map((v) => v.trim()).filter(Boolean);
+  el.value = current.filter((v) => v !== file).join('\n');
+  renderVideoAssetPreviews();
 }
 
 // ── Asset Picker ────────────────────────────────────────────────────────────
@@ -43,13 +74,13 @@ export function renderVideoAssetPreviews() {
 export async function openAssetPicker(category) {
   store.assetPickerCategory = category;
   store.assetPickerRoot = taskFolderRelative();
-  // For anchor images, default to the anchors/selected/ subdirectory where
-  // promoted anchor candidates live.
+  // anchors 默认进 anchors/selected（候选 anchor 所在目录）；
+  // references 默认进 references/（上传的参考音视频所在目录）。
   store.assetPickerPath = category === 'anchors'
     ? `${store.assetPickerRoot.replace(/\/$/, '')}/anchors/selected`
-    : store.assetPickerRoot;
+    : `${store.assetPickerRoot.replace(/\/$/, '')}/references`;
   store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : '#references'));
-  $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考视频';
+  $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考音视频';
   $('#asset-picker-modal').hidden = false;
   await browseAssets(store.assetPickerPath);
 }
@@ -69,7 +100,7 @@ export async function browseAssets(path) {
     const relative = (item) => (item.path.startsWith(base) ? item.path.slice(base.length) : item.path);
     const allowed = (item) =>
       store.assetPickerCategory === 'references'
-        ? /\.(mp4|mov|m4v|webm)$/i.test(item.name)
+        ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i.test(item.name)
         : /\.(png|jpe?g|webp)$/i.test(item.name);
 
     const list = $('#asset-picker-list');
@@ -230,6 +261,7 @@ export function formTask() {
     })(),
     lyrics: $('#lyrics').value.trim(),
     constraints: $('#constraints').value.trim(),
+    lyrics_timestamps: store.currentTask?.lyrics_timestamps || store.pendingLyricsTimestamps || [],
   };
 }
 
@@ -312,10 +344,16 @@ export async function saveTask(event, mode = 'auto') {
   const newId = `${data.data_dir}__${data.name}`;
   const editingId = store.currentTask?.id;
 
-  // mode=auto: 编辑已有任务时，让用户选择
-  if (mode === 'auto' && editingId && editingId !== newId) {
-    showSaveModeDialog(data, editingId);
-    return;
+  if (mode === 'auto') {
+    if (editingId && editingId !== newId) {
+      // 改了名字或文件夹：让用户选择新建还是更新
+      showSaveModeDialog(data, editingId);
+      return;
+    }
+    // 编辑同名任务（名字/文件夹未变）：视为更新
+    if (editingId && editingId === newId) {
+      mode = 'update';
+    }
   }
 
   const task = await _doSave(data, editingId, mode);
@@ -326,12 +364,13 @@ export async function saveTask(event, mode = 'auto') {
 }
 
 async function _doSave(data, editingId, mode) {
-  // mode=update: 先删旧任务再保存（实现"更新"效果）
-  if (mode === 'update' && editingId) {
+  const newId = `${data.data_dir}__${data.name}`;
+  // mode=update 且 id 变了（改名/改文件夹）：先删旧任务，再保存新任务
+  if (mode === 'update' && editingId && editingId !== newId) {
     await api(`/api/tasks/${encodeURIComponent(editingId)}`, 'DELETE');
   }
-  // 检查同名任务是否存在
-  const existing = store.tasks?.find(t => t.id === `${data.data_dir}__${data.name}`);
+  // 检查同名任务是否存在（同名更新除外）
+  const existing = store.tasks?.find(t => t.id === newId);
   if (existing && mode !== 'update') {
     throw new Error(`同名任务"${data.name}"已存在，请改名或选择更新已有任务`);
   }
@@ -412,9 +451,14 @@ export function editTask(id) {
   if (nameEl) nameEl.value = t.name || '';
   const dir = t.data_dir || t.task_dir || '';
   $('#task-dir').value = dir.endsWith('/') ? dir : dir;
+  // 规范化路径：去掉可能存在的 data_dir 前缀（历史脏数据），保证相对 task_dir
+  const stripDirPrefix = (file) => {
+    const prefix = dir.replace(/\/+$/, '') + '/';
+    return file && file.startsWith(prefix) ? file.slice(prefix.length) : file;
+  };
   $('#candidates').value = t.candidates;
-  $('#anchors').value = t.anchors.map((x) => x.file).join('\n');
-  $('#references').value = t.references.map((x) => x.file).join('\n');
+  $('#anchors').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
+  $('#references').value = t.references.map((x) => stripDirPrefix(x.file)).join('\n');
   // 默认切到视频 tab（对口型任务视频是主输入；纯音频任务除外）
   const isAudioOnly = t.references?.length > 0 && t.references.every(r => r.pass_reference_video === false);
   if (!isAudioOnly) switchRefTab('video');
@@ -427,6 +471,7 @@ export function editTask(id) {
   const padMode = t.references[0]?.pad_mode || 'none';
   switchPadMode(padMode);
   $('#lyrics').value = t.lyrics || '';
+  if (!store.currentTask.lyrics_timestamps) store.currentTask.lyrics_timestamps = [];
   $('#constraints').value = t.constraints || '';
 
   const radio = $(`[name=mode][value="${t.mode}"]`);
@@ -509,8 +554,10 @@ export function requestStart(id) {
 
 export async function startCurrent() {
   try {
-    // saveTask 在编辑已有任务且 ID 变化时会弹窗，此时不继续启动
     const data = formTask();
+    // 提交前校验：anchor 与参考音视频必填
+    if (!data.anchors.length) throw new Error('请先选择或生成 Anchor 图片');
+    if (!data.references.length) throw new Error('请先上传参考音视频');
     const newId = `${data.data_dir}__${data.name}`;
     const editingId = store.currentTask?.id;
     if (editingId && editingId !== newId) {
@@ -572,23 +619,47 @@ export async function uploadAsset() {
   if (!file || !id) return toast('请先选择任务文件夹并选择文件');
 
   const category = $('#upload-category').value;
+  const statusEl = $('#upload-status');
+  if (statusEl) statusEl.textContent = '上传中…';
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/uploads');
-  xhr.setRequestHeader('X-Task-Id', id);
+  xhr.timeout = 120000; // 2 分钟超时
+  xhr.setRequestHeader('X-Task-Id', encodeURIComponent(id));
   xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
   xhr.setRequestHeader('X-Category', category);
   xhr.upload.onprogress = (e) => {
-    $('#upload-status').textContent = e.lengthComputable ? `${Math.round((e.loaded / e.total) * 100)}%` : '';
+    if (statusEl && e.lengthComputable) statusEl.textContent = `${Math.round((e.loaded / e.total) * 100)}%`;
   };
   xhr.onload = () => {
+    let errorMsg = null;
     if (xhr.status < 300) {
-      const target = category === 'anchors' ? '#anchors' : '#references';
-      $(target).value += `${$(target).value ? '\n' : ''}${category}/${file.name}`;
-      $('#upload-status').textContent = '完成';
+      // 根据当前 tab 决定写入视频字段还是音频字段
+      const isAudioTab = document.querySelector('.ref-tab.active')?.dataset?.refTab === 'audio';
+      const target = category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references');
+      const el = $(target);
+      if (el) {
+        el.value += `${el.value ? '\n' : ''}${category}/${file.name}`;
+      }
+      if (statusEl) statusEl.textContent = '完成';
       renderVideoAssetPreviews();
+      toast('上传完成');
+      // 清空文件选择框，便于连续上传；几秒后自动清空状态
+      const fileInput = $('#upload-file');
+      if (fileInput) fileInput.value = '';
+      setTimeout(() => { if (statusEl && statusEl.textContent === '完成') statusEl.textContent = ''; }, 3000);
     } else {
-      toast(JSON.parse(xhr.responseText).error);
+      try { errorMsg = JSON.parse(xhr.responseText).error; } catch { errorMsg = `上传失败 (${xhr.status})`; }
+      if (statusEl) statusEl.textContent = '';
+      toast(errorMsg);
     }
+  };
+  xhr.onerror = () => {
+    if (statusEl) statusEl.textContent = '';
+    toast('上传失败：网络错误或服务未响应');
+  };
+  xhr.ontimeout = () => {
+    if (statusEl) statusEl.textContent = '';
+    toast('上传超时，请重试');
   };
   xhr.send(file);
 }
@@ -646,5 +717,349 @@ function refreshReviewOptions() {
   } else if (available.length > 0) {
     // 之前的选中项不存在了，选第一个（但仅在没有当前审核内容时）
     select.value = '';
+  }
+}
+
+/* ── Rolling lyrics timestamps editor ── */
+let _lyricsTsState = {
+  lines: [],
+  activeIndex: 0,
+  audioUrl: null,
+  extracting: false,
+};
+let _lyricsAudioEl = null;
+let _keyboardHelpShown = false;
+
+function _formatTs(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.round((seconds % 1) * 1000);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+}
+
+function _parseLyricsText(text) {
+  return text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+export function showLyricsShortcuts() {
+  toast('空格：播放/暂停  ·  Enter：添加时间点  ·  ↑/↓：切换歌词行  · Esc：关闭');
+}
+
+function _formReferenceFiles() {
+  // 实时读取表单里的音视频引用：视频 tab 用 #references，音频 tab 用 #audio-refs
+  const isAudioTab = document.querySelector('.ref-tab.active')?.dataset?.refTab === 'audio';
+  const files = isAudioTab ? lines('#audio-refs') : lines('#references');
+  return { files, isAudioTab };
+}
+
+function _isMediaFile(name) {
+  return /\.(mp3|wav|m4a|aac|flac|ogg|mp4|mov|m4v|avi|mkv|webm)$/i.test(name || '');
+}
+
+function _resolveAudioSource() {
+  // 优先用已保存任务的 references（含后端定位），否则回退到表单字段（未保存任务）
+  const saved = store.currentTask?.references || [];
+  const firstSaved = saved.find((r) => _isMediaFile(r.file));
+  if (firstSaved) {
+    return { source: 'task', index: saved.indexOf(firstSaved), file: firstSaved.file };
+  }
+  const { files } = _formReferenceFiles();
+  const file = files.find((f) => _isMediaFile(f));
+  if (file) {
+    return { source: 'form', index: 0, file };
+  }
+  return null;
+}
+
+// 相对 data_root 的文件路径 = task_dir + '/' + 表单文件值（值已含 category 子目录）
+function _relativeDataRootPath(file) {
+  const taskDir = ($('#task-dir').value || '').trim().replace(/\/+$/, '');
+  return taskDir ? `${taskDir}/${file}` : file;
+}
+
+function _applyLyricsText(texts, timestamps) {
+  // texts 为新歌词行；timestamps 为已存时间戳（按 text 匹配保留 time）
+  const timeByText = {};
+  (timestamps || []).forEach((ts) => {
+    if (ts?.text != null && ts.time != null) timeByText[ts.text] = ts.time;
+  });
+  _lyricsTsState.lines = texts.map((text) => ({
+    text,
+    time: timeByText[text] != null ? timeByText[text] : null,
+  }));
+  if (_lyricsTsState.activeIndex >= _lyricsTsState.lines.length) {
+    _lyricsTsState.activeIndex = _lyricsTsState.lines.length - 1;
+  }
+}
+
+export async function openLyricsTimestampsEditor() {
+  const task = store.currentTask;
+  const raw = $('#lyrics').value || '';
+  const texts = _parseLyricsText(raw);
+
+  // 音视频必须存在（歌词允许为空，未保存任务也允许）
+  const ref = _resolveAudioSource();
+  if (!ref) {
+    return toast('请先上传音视频，再制作滚动歌词');
+  }
+
+  const modal = $('#lyrics-timestamps-modal');
+  modal.hidden = false;
+  if (!_keyboardHelpShown) {
+    showLyricsShortcuts();
+    _keyboardHelpShown = true;
+  }
+
+  const existing = task?.lyrics_timestamps || store.pendingLyricsTimestamps || [];
+  _applyLyricsText(texts, existing);
+  _lyricsTsState.activeIndex = 0;
+  _lyricsTsState.audioUrl = null;
+  _lyricsTsState.extracting = false;
+
+  _lyricsAudioEl = $('#lyrics-audio');
+  _lyricsAudioEl.src = '';
+  _lyricsAudioEl.load();
+  // 播放时自动滚动到当前时间对应的已打点句子
+  _lyricsAudioEl.addEventListener('timeupdate', _autoLocateByTime);
+
+  renderLyricsTimestampLines();
+  _refreshAddButton();
+
+  try {
+    _lyricsTsState.extracting = true;
+    $('#add-timestamp-btn').disabled = true;
+    let res;
+    if (ref.source === 'task') {
+      res = await extractTaskAudio(task.id, ref.index);
+    } else {
+      res = await extractAudioByPath(_relativeDataRootPath(ref.file));
+    }
+    _lyricsTsState.audioUrl = res.audio_url;
+    _lyricsAudioEl.src = res.audio_url;
+    _lyricsAudioEl.load();
+  } catch (e) {
+    toast(`音频准备失败: ${e.message}`);
+  } finally {
+    _lyricsTsState.extracting = false;
+    _refreshAddButton();
+  }
+}
+
+function updateLyricsCountHint() {
+  const hint = $('#lyrics-count-hint');
+  if (!hint) return;
+  const total = _lyricsTsState.lines.length;
+  const set = _lyricsTsState.lines.filter((l) => l.time != null).length;
+  hint.textContent = total ? `共 ${total} 句 · 已打点 ${set} 句` : '尚未填写歌词';
+}
+
+export function closeLyricsTimestampsEditor() {
+  const modal = $('#lyrics-timestamps-modal');
+  modal.hidden = true;
+  if (_lyricsAudioEl) {
+    _lyricsAudioEl.pause();
+    _lyricsAudioEl.removeEventListener('timeupdate', _autoLocateByTime);
+    _lyricsAudioEl.src = '';
+    _lyricsAudioEl.load();
+  }
+  _lyricsTsState.audioUrl = null;
+}
+
+function _refreshAddButton() {
+  const btn = $('#add-timestamp-btn');
+  if (!btn) return;
+  btn.disabled = _lyricsTsState.extracting || !_lyricsAudioEl || !_lyricsAudioEl.src;
+}
+
+export function renderLyricsTimestampLines() {
+  const container = $('#lyrics-timestamp-lines');
+  if (!container) return;
+  if (!_lyricsTsState.lines.length) {
+    container.innerHTML = '<div class="lyrics-empty">歌词为空，请在上方逐行填写歌词后点击「应用歌词」</div>';
+    return;
+  }
+  container.innerHTML = _lyricsTsState.lines.map((line, i) => {
+    const tsClass = line.time != null ? 'set' : '';
+    const activeClass = i === _lyricsTsState.activeIndex ? 'active' : '';
+    const redoBtn = line.time != null
+      ? `<button type="button" class="line-redo" data-index="${i}" title="重新打这一句">↺</button>`
+      : '<span class="line-redo-placeholder"></span>';
+    return `<div class="lyrics-line ${activeClass}" data-index="${i}">
+      <div class="ts ${tsClass}">${_formatTs(line.time)}</div>
+      <div class="text">${escapeHtml(line.text)}</div>
+      ${redoBtn}
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.lyrics-line').forEach((el) => {
+    el.addEventListener('click', () => clickLyricsLine(parseInt(el.dataset.index, 10)));
+  });
+  container.querySelectorAll('.line-redo').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // 不触发行点击
+      redoLyricsLine(parseInt(btn.dataset.index, 10));
+    });
+  });
+  updateLyricsCountHint();
+}
+
+export function setActiveLine(index) {
+  if (index < 0 || index >= _lyricsTsState.lines.length) return;
+  _lyricsTsState.activeIndex = index;
+  renderLyricsTimestampLines();
+  _scrollActiveToSecondRow();
+}
+
+// 让当前打标句尽量滚动到第二行（第一句除外，它在顶部）
+function _scrollActiveToSecondRow() {
+  const container = $('#lyrics-timestamp-lines');
+  if (!container) return;
+  const active = container.querySelector('.lyrics-line.active');
+  if (!active) return;
+  const rows = container.querySelectorAll('.lyrics-line');
+  const rowHeight = rows[0]?.offsetHeight || 0;
+  const gap = 8;
+  // 目标：active 行出现在第二行（即其上方只露出第一行）
+  const targetTop = _lyricsTsState.activeIndex === 0
+    ? 0
+    : (_lyricsTsState.activeIndex - 1) * (rowHeight + gap);
+  container.scrollTo({ top: targetTop, behavior: 'smooth' });
+}
+
+// 播放时根据当前时间自动定位到对应已打点句子
+function _autoLocateByTime() {
+  if (!_lyricsAudioEl || _lyricsAudioEl.paused) return;
+  // 当前正在打点一个未打点的句子时，不自动回拉（尊重用户手动跳句）
+  const currentLine = _lyricsTsState.lines[_lyricsTsState.activeIndex];
+  if (currentLine && currentLine.time == null) return;
+  const t = _lyricsAudioEl.currentTime;
+  let target = -1;
+  for (let i = 0; i < _lyricsTsState.lines.length; i++) {
+    const time = _lyricsTsState.lines[i].time;
+    if (time != null && time <= t) target = i;
+    else if (time != null && time > t) break;
+  }
+  if (target >= 0 && target !== _lyricsTsState.activeIndex) {
+    _lyricsTsState.activeIndex = target;
+    renderLyricsTimestampLines();
+    _scrollActiveToSecondRow();
+  }
+}
+
+export function clickLyricsLine(index) {
+  const line = _lyricsTsState.lines[index];
+  if (!line) return;
+  setActiveLine(index);
+  // 已打点句子：点击跳转到对应时间点（仅定位，不清空）
+  if (line.time != null && _lyricsAudioEl && _lyricsAudioEl.src) {
+    _lyricsAudioEl.currentTime = line.time;
+  }
+}
+
+export function redoLyricsLine(index) {
+  const line = _lyricsTsState.lines[index];
+  if (!line || line.time == null) return;
+  // 清空这一句的时间点（只清这一句，不影响其它句）
+  line.time = null;
+  renderLyricsTimestampLines();
+
+  // 选中定位到要重打的这一句
+  setActiveLine(index);
+
+  if (_lyricsAudioEl && _lyricsAudioEl.src) {
+    if (index === 0) {
+      // 第一句：从音频开头播放
+      _lyricsAudioEl.currentTime = 0;
+    } else {
+      // 从上一句的时间点开始播放（留出准备缓冲），选中仍定位到要重打的这句
+      const prev = _lyricsTsState.lines[index - 1];
+      const startTime = prev && prev.time != null ? prev.time : Math.max(0, line.time - 2);
+      _lyricsAudioEl.currentTime = startTime;
+    }
+  }
+  toast(`从上一句开始播放，到「${line.text}」时按 Enter 重打`);
+}
+
+export function addTimestamp() {
+  if (!_lyricsAudioEl || _lyricsTsState.extracting) return;
+  if (_lyricsAudioEl.paused) {
+    _lyricsAudioEl.play();
+    return;
+  }
+  if (!_lyricsTsState.lines.length) {
+    toast('请先在任务表单中填写歌词');
+    return;
+  }
+  const idx = _lyricsTsState.activeIndex;
+  const time = _lyricsAudioEl.currentTime;
+  const line = _lyricsTsState.lines[idx];
+  if (!line) return;
+  // 只覆盖当前句的时间点，不影响其它句子
+  line.time = time;
+  renderLyricsTimestampLines();
+  if (_lyricsTsState.activeIndex < _lyricsTsState.lines.length - 1) {
+    setActiveLine(_lyricsTsState.activeIndex + 1);
+  }
+}
+
+export function resetTimestamps() {
+  _lyricsTsState.lines.forEach((line) => { line.time = null; });
+  _lyricsTsState.activeIndex = 0;
+  renderLyricsTimestampLines();
+}
+
+export async function saveLyricsTimestampsFromModal() {
+  const task = store.currentTask;
+  const timestamps = _lyricsTsState.lines.map((line) => ({
+    text: line.text,
+    time: line.time,
+  }));
+  // 把 modal 里编辑的歌词同步回主表单
+  const lyricsText = _lyricsTsState.lines.map((l) => l.text).join('\n');
+  if ($('#lyrics')) $('#lyrics').value = lyricsText;
+  // 任务尚未保存时，先暂存到内存，随任务保存时一并写入；否则直接持久化
+  if (!task) {
+    store.pendingLyricsTimestamps = timestamps;
+    closeLyricsTimestampsEditor();
+    toast('已暂存时间戳，保存任务后自动写入');
+    return;
+  }
+  try {
+    await saveLyricsTimestamps(task.id, timestamps);
+    task.lyrics_timestamps = timestamps;
+    closeLyricsTimestampsEditor();
+    toast('歌词时间戳已保存');
+  } catch (e) {
+    toast(`保存失败: ${e.message}`);
+  }
+}
+
+export function previewLyricsTimestamps() {
+  const data = _lyricsTsState.lines.map((line) => ({
+    text: line.text,
+    time: line.time,
+  }));
+  console.log('[lyrics timestamps preview]', JSON.stringify(data, null, 2));
+  toast(`已记录 ${_lyricsTsState.lines.filter((l) => l.time != null).length} 个时间点（按 F12 查看）`);
+}
+
+export function onLyricsTimestampsKey(e) {
+  if ($('#lyrics-timestamps-modal').hidden) return;
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (_lyricsAudioEl.paused) _lyricsAudioEl.play(); else _lyricsAudioEl.pause();
+  } else if (e.code === 'Enter') {
+    e.preventDefault();
+    addTimestamp();
+  } else if (e.code === 'ArrowUp') {
+    e.preventDefault();
+    setActiveLine(_lyricsTsState.activeIndex - 1);
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    setActiveLine(_lyricsTsState.activeIndex + 1);
+  } else if (e.code === 'Escape') {
+    e.preventDefault();
+    closeLyricsTimestampsEditor();
   }
 }

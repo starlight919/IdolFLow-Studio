@@ -36,6 +36,10 @@ class VideoTaskRunner:
 
     def validate(self) -> list[str]:
         errors = []
+        if not self.adapter.anchors:
+            errors.append("anchors must not be empty")
+        if not self.adapter.references:
+            errors.append("references must not be empty")
         keys = [anchor.key for anchor in self.adapter.anchors]
         if len(keys) != len(set(keys)):
             errors.append("anchor keys must be unique")
@@ -218,6 +222,9 @@ class VideoTaskRunner:
         return self.adapter.prompts[0]
 
     def submit(self, run_id: str, candidates: int | None = None, variant: str | None = None, provider: str = "auto") -> RunState:
+        errors = self.validate()
+        if errors:
+            raise ValueError("Invalid video task:\n- " + "\n- ".join(errors))
         assets = self.upload(provider)
         state = self._state(run_id)
         count = candidates or self.adapter.candidate_policy.count

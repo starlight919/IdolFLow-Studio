@@ -155,8 +155,6 @@ class TaskStore:
             raise ValueError(f"invalid mode: {mode}")
         anchors = task.get("anchors") or []
         references = task.get("references") or []
-        if not anchors or not references:
-            raise ValueError("at least one anchor and reference are required")
 
         # Determine data_dir
         task_dir_override = task.get("task_dir")

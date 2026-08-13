@@ -27,8 +27,38 @@ import {
   markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
   closeAssets, previewPrompt, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
+  openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
+  saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
+  removeVideoAsset,
 } from './modules/task.js';
 import { prepareReview, loadReview, renderReview } from './modules/review.js';
+
+// ── Theme (dark / light) toggle ──────────────────────────────────────────────
+
+const THEME_KEY = 'idolflow-theme';
+
+function currentTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === 'dark' || saved === 'light') return saved;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = $('#theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️ 浅色' : '🌙 深色';
+}
+
+export function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+}
+
+export function initTheme() {
+  applyTheme(currentTheme());
+  $('#theme-toggle')?.addEventListener('click', toggleTheme);
+}
 
 // ── Unified Delete Confirm Dialog ────────────────────────────────────────────
 
@@ -39,7 +69,7 @@ export function closeDeleteModal() {
   if (deleteResolver) { deleteResolver(false); deleteResolver = null; }
 }
 
-function showDeleteConfirm({ title, desc, showFileOption = true }) {
+function showDeleteConfirm({ title, desc, showFileOption = true, confirmText = '确认删除', danger = true }) {
   return new Promise((resolve) => {
     const confirmBtn = $('#delete-confirm');
     if (!confirmBtn) {
@@ -50,6 +80,8 @@ function showDeleteConfirm({ title, desc, showFileOption = true }) {
     deleteResolver = resolve;
     $('#delete-modal-title').textContent = title;
     $('#delete-modal-desc').innerHTML = escapeHtml(desc).replace(/\n/g, '<br>');
+    confirmBtn.textContent = confirmText;
+    confirmBtn.classList.toggle('danger', danger);
     const fileLabel = $('#delete-files-label');
     const fileCheckbox = $('#delete-remove-files');
     fileCheckbox.checked = false;
@@ -62,7 +94,12 @@ function showDeleteConfirm({ title, desc, showFileOption = true }) {
 export function confirmDeleteAction() {
   if (deleteResolver) { deleteResolver(true); deleteResolver = null; }
   $('#delete-modal').hidden = true;
+  // 重置按钮文案，避免影响下次删除确认
+  const confirmBtn = $('#delete-confirm');
+  if (confirmBtn) { confirmBtn.textContent = '确认删除'; confirmBtn.classList.add('danger'); }
 }
+
+export { showDeleteConfirm };
 
 // 兜底：addEventListener 也绑定（防止 inline onclick 因某些原因不生效）
 try {
@@ -271,6 +308,13 @@ function setupDelegatedHandlers() {
 
     // ── Review card (no vote buttons, only download) ──
 
+    // ── Asset preview / chip remove (✕) buttons ──
+    if (target.closest('.asset-remove, .chip-remove')) {
+      const btn = target.closest('.asset-remove, .chip-remove');
+      removeVideoAsset(btn.dataset.type, btn.dataset.file);
+      return;
+    }
+
     // ── Task / Anchor task card buttons ──
     const actionBtn = target.closest('[data-action]');
     if (actionBtn) {
@@ -323,11 +367,12 @@ Object.assign(window, {
   // Task
   openAssetPicker, closeAssetPicker, browseAssets, toggleAsset, confirmAssetSelection,
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder,
-  renderVideoAssetPreviews, autoFillTaskFields, markAsManuallyEdited,
+  renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets, closeAssets,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction,
   previewPrompt, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
+  openLyricsTimestampsEditor, showLyricsShortcuts,
   // Anchor
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt,
   requestAnchorStart, uploadAnchorReference, loadAnchorTasks, editAnchorTask,
@@ -348,6 +393,7 @@ Object.assign(window, {
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
 async function init() {
+  initTheme();
   setupDelegatedHandlers();
   updateMode();
   store.workspaceSettings = await loadSettings();
@@ -356,6 +402,17 @@ async function init() {
   if (taskForm) taskForm.addEventListener('submit', (e) => saveTask(e));
   const anchorForm = $('#anchor-form');
   if (anchorForm) anchorForm.addEventListener('submit', (e) => saveAnchorTask(e));
+  const openTsBtn = $('#open-lyrics-timestamps');
+  if (openTsBtn) openTsBtn.addEventListener('click', openLyricsTimestampsEditor);
+  $('#close-lyrics-timestamps')?.addEventListener('click', closeLyricsTimestampsEditor);
+  $('#lyrics-timestamps-modal')?.addEventListener('click', (e) => {
+    if (e.target === $('#lyrics-timestamps-modal')) closeLyricsTimestampsEditor();
+  });
+  $('#add-timestamp-btn')?.addEventListener('click', addTimestamp);
+  $('#reset-timestamps-btn')?.addEventListener('click', resetTimestamps);
+  $('#save-lyrics-timestamps-btn')?.addEventListener('click', saveLyricsTimestampsFromModal);
+  $('#preview-lyrics-btn')?.addEventListener('click', previewLyricsTimestamps);
+  document.addEventListener('keydown', onLyricsTimestampsKey);
   await Promise.all([loadTasks(), loadRuns(), prepareAnchors()]);
   openRunPoll();
   maybeShowHelpOnFirstVisit();

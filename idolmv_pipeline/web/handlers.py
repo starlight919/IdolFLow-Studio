@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from idolmv_pipeline.image_tasks.prompts import build_anchor_prompt, preset_options
 from idolmv_pipeline.image_tasks.models import AnchorTask
 from idolmv_pipeline.review.publisher import Publisher, safe_name
+from idolmv_pipeline.seedance.media import extract_audio
 from idolmv_pipeline.video_tasks.factory import adapter_from_task
 from idolmv_pipeline.video_tasks.prompts import build_prompt
 
@@ -135,6 +136,82 @@ def serve_file(handler, path: Path, content_type: str | None = None,
         pass
 
 
+def _is_video_file(path: Path) -> bool:
+    mt, _ = mimetypes.guess_type(str(path))
+    return mt is not None and mt.startswith("video/")
+
+
+def _is_audio_file(path: Path) -> bool:
+    mt, _ = mimetypes.guess_type(str(path))
+    return mt is not None and mt.startswith("audio/")
+
+
+def _extract_audio_response(handler, source: Path, data_root: Path) -> None:
+    if _is_audio_file(source):
+        audio_path = source
+    elif _is_video_file(source):
+        audio_dir = source.parent / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = audio_dir / f"{source.stem}.mp3"
+        if not audio_path.exists():
+            extract_audio(source, audio_path)
+    else:
+        return json_response(handler, 400, {"error": "file is neither video nor audio"})
+
+    try:
+        relative = audio_path.relative_to(data_root).as_posix()
+    except ValueError:
+        relative = audio_path.name
+    json_response(handler, 200, {
+        "audio_file": relative,
+        "audio_url": f"/api/files?root=data_root&path={quote(relative)}",
+    })
+
+
+def _extract_audio_by_path(handler) -> None:
+    data = read_json(handler) or {}
+    rel = (data.get("file") or "").strip().lstrip("/")
+    if not rel:
+        return json_response(handler, 400, {"error": "file is required"})
+    source = handler.app.config.resolve_inside("data_root", rel)
+    if not source.is_file():
+        return json_response(handler, 404, {"error": f"missing file: {rel}"})
+    _extract_audio_response(handler, source, handler.app.config.data_root)
+
+
+def _extract_task_audio(handler, task_id: str) -> None:
+    data = read_json(handler) or {}
+    task = handler.app.store.get(task_id)
+    refs = task.get("references", [])
+    if not refs:
+        return json_response(handler, 400, {"error": "task has no references"})
+    index = int(data.get("reference_index", 0))
+    if index < 0 or index >= len(refs):
+        return json_response(handler, 400, {"error": "invalid reference_index"})
+    ref = refs[index]
+    task_dir = Path(task["task_dir"])
+    # 用 store._asset_path 定位：兼容 file 相对 task_dir 或相对 data_root 两种写法
+    try:
+        source = handler.app.store._asset_path(task_dir, ref["file"])
+    except ValueError:
+        return json_response(handler, 404, {"error": f"missing reference file: {ref['file']}"})
+    _extract_audio_response(handler, source, handler.app.config.data_root)
+
+
+def _get_lyrics_timestamps(handler, task_id: str) -> None:
+    task = handler.app.store.get(task_id)
+    json_response(handler, 200, {"lyrics_timestamps": task.get("lyrics_timestamps", [])})
+
+
+def _save_lyrics_timestamps(handler, task_id: str) -> None:
+    data = read_json(handler) or {}
+    task = handler.app.store.get(task_id)
+    task["lyrics_timestamps"] = data.get("lyrics_timestamps", [])
+    task.pop("id", None)
+    handler.app.store.save(task)
+    json_response(handler, 200, {"lyrics_timestamps": task["lyrics_timestamps"]})
+
+
 def find_candidate(manifest: dict, candidate_id: str) -> dict:
     for candidate in manifest["candidates"]:
         if candidate["id"] == candidate_id:
@@ -194,15 +271,24 @@ def _list_files(handler, parsed) -> None:
     root_name = query.get("root", ["data_root"])[0]
     if root_name not in {"data_root", "upload_root"}:
         raise ValueError("invalid root")
-    directory = handler.app.config.resolve_inside(root_name, query.get("path", [""])[0])
-    if not directory.is_dir():
-        raise FileNotFoundError(directory)
+    target = handler.app.config.resolve_inside(root_name, query.get("path", [""])[0])
+    # path 指向文件时，直接返回文件内容（供 audio/video 播放，支持 Range）
+    if target.is_file():
+        serve_file(handler, target)
+        return
+    if not target.is_dir():
+        raise FileNotFoundError(target)
     root = getattr(handler.app.config, root_name)
     items = [{
         "name": item.name, "path": item.relative_to(root).as_posix(), "directory": item.is_dir(),
         "size": item.stat().st_size if item.is_file() else None,
-    } for item in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())) if not item.name.startswith(".")]
-    json_response(handler, 200, {"root": root_name, "path": directory.relative_to(root).as_posix(), "items": items})
+    } for item in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())) if not item.name.startswith(".")]
+    json_response(handler, 200, {"root": root_name, "path": target.relative_to(root).as_posix(), "items": items})
+
+
+@_register("POST", "/api/extract-audio")
+def handle_extract_audio(handler, path: str):
+    _extract_audio_by_path(handler)
 
 
 @_register("POST", "/api/folders")
@@ -434,6 +520,8 @@ def handle_tasks_get(handler, path: str):
     task_id = unquote(parts[2])
     if len(parts) == 4 and parts[3] == "assets":
         return json_response(handler, 200, _task_assets(handler, task_id))
+    if len(parts) == 4 and parts[3] == "lyrics-timestamps":
+        return _get_lyrics_timestamps(handler, task_id)
     json_response(handler, 200, handler.app.store.get(task_id))
 
 
@@ -446,6 +534,12 @@ def handle_tasks_post(handler, path: str):
         category = parse_qs(full.query).get("category", [None])[0]
         removed = handler.app.store.clear_assets(task_id, category=category)
         return json_response(handler, 200, {"ok": True, "removed": removed})
+    if len(parts) == 4 and parts[3] == "extract-audio":
+        task_id = unquote(parts[2])
+        return _extract_task_audio(handler, task_id)
+    if len(parts) == 4 and parts[3] == "lyrics-timestamps":
+        task_id = unquote(parts[2])
+        return _save_lyrics_timestamps(handler, task_id)
     data = read_json(handler)
     json_response(handler, 201, handler.app.store.save(data))
 
@@ -495,7 +589,7 @@ def _task_assets(handler, task_id: str) -> dict:
 
 @_register("POST", "/api/uploads")
 def handle_upload(handler, path: str):
-    task_id = handler.headers.get("X-Task-Id", "").strip()
+    task_id = unquote(handler.headers.get("X-Task-Id", "")).strip()
     filename = Path(unquote(handler.headers.get("X-Filename", ""))).name
     category = handler.headers.get("X-Category", "references")
     if not task_id or not filename or category not in {"anchors", "references", "anchor-references"}:

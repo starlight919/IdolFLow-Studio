@@ -40,3 +40,19 @@ export function del(url) {
 export async function loadSettings() {
   return api('/api/settings/public');
 }
+
+export async function extractTaskAudio(taskId, referenceIndex = 0) {
+  return post(`/api/tasks/${taskId}/extract-audio`, { reference_index: referenceIndex });
+}
+
+export async function extractAudioByPath(file) {
+  return post('/api/extract-audio', { file });
+}
+
+export async function getLyricsTimestamps(taskId) {
+  return api(`/api/tasks/${taskId}/lyrics-timestamps`);
+}
+
+export async function saveLyricsTimestamps(taskId, timestamps) {
+  return post(`/api/tasks/${taskId}/lyrics-timestamps`, { lyrics_timestamps: timestamps });
+}

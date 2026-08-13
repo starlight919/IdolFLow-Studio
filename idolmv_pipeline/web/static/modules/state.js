@@ -13,6 +13,7 @@ const store = {
   runs: [],
   currentTask: null,
   pendingTask: null,
+  pendingLyricsTimestamps: null,
 
   // ========== Asset Picker ==========
   assetPickerCategory: '',
