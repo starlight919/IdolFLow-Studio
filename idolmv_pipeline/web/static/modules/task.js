@@ -235,7 +235,7 @@ export function formTask() {
       const videoRefs = lines('#references');
       const audioRefs = lines('#audio-refs');
       // 当前在音频 tab 下：纯音频模式，不传视频
-      const isAudioTab = document.querySelector('.ref-tab.active')?.dataset?.refTab === 'audio';
+      const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
       if (isAudioTab) {
         return audioRefs.map((file, i) => ({
           name: `reference-${i + 1}`,
@@ -285,7 +285,7 @@ export function switchRefTab(tab) {
     if (padRow) padRow.style.display = 'none';
     if (passAudioWrap) passAudioWrap.style.display = 'none';
   }
-  $$('.ref-tab').forEach(b => b.classList.toggle('active', b.dataset.refTab === tab));
+  $$('.ref-tab[data-ref-tab]').forEach(b => b.classList.toggle('active', b.dataset.refTab === tab));
 }
 
 export function updateMode() {
@@ -410,6 +410,28 @@ function showSaveModeDialog(data, editingId) {
   };
 }
 
+const PAD_MODE_NAMES = { none: '原始时长', back: '后补齐', front: '前补齐' };
+
+function _taskConfigChips(t) {
+  const chips = [];
+  chips.push(`<span class="cfg-chip cfg-mode">${modeName(t.mode)}</span>`);
+  // 时长对齐（取第一个 reference 的 pad_mode，旧数据缺省 back）
+  const pad = t.references?.[0]?.pad_mode || 'back';
+  chips.push(`<span class="cfg-chip">⏱ ${PAD_MODE_NAMES[pad] || pad}</span>`);
+  // 音视频传入
+  const hasVideo = t.references?.some((r) => r.pass_reference_video !== false);
+  const hasAudio = t.references?.some((r) => r.pass_reference_audio !== false);
+  if (hasVideo && hasAudio) chips.push(`<span class="cfg-chip">🎬 视频+音频</span>`);
+  else if (hasVideo) chips.push(`<span class="cfg-chip">🎬 仅视频</span>`);
+  else if (hasAudio) chips.push(`<span class="cfg-chip">🎵 仅音频</span>`);
+  // 歌词时间戳（打了几个有效时间点）
+  const timedCount = (t.lyrics_timestamps || []).filter((x) => x?.time != null).length;
+  if (timedCount > 0) chips.push(`<span class="cfg-chip cfg-ts">🎤 时间戳 ${timedCount} 句</span>`);
+  // 候选数
+  chips.push(`<span class="cfg-chip">${t.candidates} 候选</span>`);
+  return chips.join('');
+}
+
 export async function loadTasks() {
   store.tasks = await api('/api/tasks');
   const list = $('#task-list');
@@ -417,7 +439,11 @@ export async function loadTasks() {
   const html = store.tasks
     .map(
       (t) => `<article class="task" data-id="${escapeHtml(t.id)}">
-        <div><h3>${escapeHtml(t.name || t.id)}</h3><div class="meta">📁 ${escapeHtml(t.data_dir || t.task_dir || '?')} · ${modeName(t.mode)} · ${t.anchors.length} anchors · ${t.candidates} 候选/组合</div></div>
+        <div class="task-info">
+          <h3>${escapeHtml(t.name || t.id)}</h3>
+          <div class="meta">📁 ${escapeHtml(t.data_dir || t.task_dir || '?')} · ${t.anchors.length} anchors</div>
+          <div class="cfg-chips">${_taskConfigChips(t)}</div>
+        </div>
         <div class="actions">
           <button class="secondary" data-action="task-assets">Assets</button>
           <button class="secondary" data-action="task-edit">编辑</button>
@@ -634,7 +660,7 @@ export async function uploadAsset() {
     let errorMsg = null;
     if (xhr.status < 300) {
       // 根据当前 tab 决定写入视频字段还是音频字段
-      const isAudioTab = document.querySelector('.ref-tab.active')?.dataset?.refTab === 'audio';
+      const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
       const target = category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references');
       const el = $(target);
       if (el) {
@@ -748,7 +774,7 @@ export function showLyricsShortcuts() {
 
 function _formReferenceFiles() {
   // 实时读取表单里的音视频引用：视频 tab 用 #references，音频 tab 用 #audio-refs
-  const isAudioTab = document.querySelector('.ref-tab.active')?.dataset?.refTab === 'audio';
+  const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
   const files = isAudioTab ? lines('#audio-refs') : lines('#references');
   return { files, isAudioTab };
 }
@@ -801,7 +827,7 @@ export async function openLyricsTimestampsEditor() {
   // 音视频必须存在（歌词允许为空，未保存任务也允许）
   const ref = _resolveAudioSource();
   if (!ref) {
-    return toast('请先上传音视频，再制作滚动歌词');
+    return toast('请先上传音视频，再打时间戳');
   }
 
   const modal = $('#lyrics-timestamps-modal');
@@ -982,10 +1008,6 @@ export function redoLyricsLine(index) {
 
 export function addTimestamp() {
   if (!_lyricsAudioEl || _lyricsTsState.extracting) return;
-  if (_lyricsAudioEl.paused) {
-    _lyricsAudioEl.play();
-    return;
-  }
   if (!_lyricsTsState.lines.length) {
     toast('请先在任务表单中填写歌词');
     return;
@@ -999,6 +1021,10 @@ export function addTimestamp() {
   renderLyricsTimestampLines();
   if (_lyricsTsState.activeIndex < _lyricsTsState.lines.length - 1) {
     setActiveLine(_lyricsTsState.activeIndex + 1);
+  }
+  // 未播放时打点（如第一句 0s）后自动开始播放，方便连续打点
+  if (_lyricsAudioEl.paused) {
+    _lyricsAudioEl.play();
   }
 }
 

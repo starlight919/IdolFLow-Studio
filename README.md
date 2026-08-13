@@ -203,18 +203,26 @@ Anchor 是整个系统的"主角"抽象。它不是一张图，而是一组**可
 
 > 📄 完整创建/运行流程详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md)；对口型唱歌详见 [docs/guides/Singing_Video_Guide.md](docs/guides/Singing_Video_Guide.md)；口型+动作管线详见 [docs/guides/Dance_Pipeline.md](docs/guides/Dance_Pipeline.md)
 
-### 4. 歌词时间戳（滚动歌词制作）
+### 4. 歌词时间戳（可选）
+
+> 歌词照常在「歌词」框直接填写即可，**不打时间戳也能正常生成视频**。时间戳是可选的增强功能，仅当需要更精确的口型对齐时才需额外打点。
 
 对口型/口型+动作任务可为歌词逐句打时间戳，用于精确对口的滚动歌词生成。
 
-- 歌词框下方点「制作滚动歌词 >」打开编辑器，播放音视频后逐句打点（Enter 打点、↑/↓ 切句、空格播放/暂停）。
+- 歌词框下方点「打时间戳（可选）>」打开编辑器，播放音视频后逐句打点（Enter 打点、↑/↓ 切句、空格播放/暂停）。
 - 点击已打点句子跳转定位；每句右侧「↺」重打这一句（从上一句播放，第一句从音频开头）。
 - 播放时自动定位到当前时间对应的已打点句子。
-- 时间戳保存在任务的 `lyrics_timestamps` 字段，格式 `[{ "text": "歌词", "time": 1.234 }]`。
+- 时间戳保存在任务的 `lyrics_timestamps` 字段，格式 `[{ "text": "歌词", "time": 1.234 }]`，`time` 为秒（未打点为 `null`）。
 
-> ⚠️ **尚未集成到 prompt**：当前 `lyrics_timestamps` 仅由后端保存，**尚未参与 prompt 生成**。这一块的 prompt 组合逻辑仍待设计（如何把时间戳信息组织进对口型 prompt）。
+**时间戳如何进入 prompt**（见 [Prompt_Design.md §12](docs/guides/Prompt_Design.md)）：
 
-> 📄 歌词时间戳的完整交互说明详见 [docs/guides/Singing_Video_Guide.md](docs/guides/Singing_Video_Guide.md#歌词时间戳滚动歌词制作)
+- 无有效时间戳（空、或全部 `null`）→ 普通歌词 `演唱/说话内容：{歌词}`。
+- 全部歌词有时间 → 逐句输出 `时间 + 歌词`：`1.21s开始唱"冻结那时间"；`。
+- 部分歌词有时间 → 完整歌词写一遍，再单独列出已标注时间点，其余歌词按原顺序自然衔接。
+
+**时间戳与时长对齐的 offset**（见 [Prompt_Design.md §2.4.1](docs/guides/Prompt_Design.md)）：只有 `pad_mode=front`（前面补齐）时，音频开头补了静音，时间戳需整体加 `ceil(total)-total` 的偏移；`none`/`back` 偏移为 0；超时长（> 模型上限）必为 0。
+
+> 📄 歌词时间戳的完整交互说明详见 [docs/guides/Singing_Video_Guide.md](docs/guides/Singing_Video_Guide.md#歌词时间戳可选)；prompt 分层设计详见 [docs/guides/Prompt_Design.md](docs/guides/Prompt_Design.md)
 
 ### 5. 时长对齐（pad_mode）
 
@@ -224,7 +232,7 @@ Seedance 的 `duration` 只接受整数秒，原始视频/音频往往是非整�
 |------|------|----------|
 | `none` 原始时长 | 不补齐，直接用原始长度 | 不想引入额外帧 |
 | `back` 后面补齐 | 视频末尾补最后一帧、音频末尾补静音 | 默认推荐，最稳定 |
-| `front` 前面补齐 | 视频开头补第一帧、音频开头补静音 | 缓解口型延迟（前面静止帧"预热"） |
+| `front` 前面补齐 | 视频开头补第一帧、音频开头补静音 | 缓解口型延迟（前面静止帧"预热"）；**注意会引入歌词时间戳偏移**（见上） |
 
 最终输出**都会裁回原始时长**（mux 阶段用原始音频 `-shortest` 或裁掉前面 padding），保证音画对齐。
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from idolmv_pipeline.seedance import tunnel
 from idolmv_pipeline.seedance.client import SeedanceClient
@@ -84,13 +87,15 @@ class VideoTaskRunner:
             return [(segment.start, segment.cut_duration or total - segment.start, segment.seedance_duration, total, "back") for segment in reference.segments]
         max_duration = self._max_duration_for_model()
         pad_mode = getattr(reference, "pad_mode", "back")
-        if pad_mode == "none":
-            # 不补齐，截取原始时长，但 seedance_duration 仍为 ceil
-            ceil_total = min(math.ceil(total), max_duration)
-            seedance_duration = max(4, ceil_total)
-            return [(0.0, total, seedance_duration, total, "none")]
+        # 超时长：直接截断到 max_duration，时长对齐失去意义，归一为 none
+        if total > max_duration:
+            pad_mode = "none"
         ceil_total = min(math.ceil(total), max_duration)
         seedance_duration = max(4, ceil_total)
+        if pad_mode == "none":
+            # 不补齐：超时长截断到 ceil_total；正常 none 保持原始时长
+            cut_duration = ceil_total if total > max_duration else total
+            return [(0.0, cut_duration, seedance_duration, total, "none")]
         return [(0.0, ceil_total, seedance_duration, total, pad_mode)]
 
     def prepare(self) -> None:
@@ -221,6 +226,36 @@ class VideoTaskRunner:
             return next(prompt for prompt in self.adapter.prompts if prompt.name == name)
         return self.adapter.prompts[0]
 
+    def _log_job_decisions(self, anchor: AnchorSpec, ref: ReferenceSpec, prompt: PromptVariant, content: list[dict], duration: int) -> None:
+        """记录每个 (anchor, reference, prompt) 组合的关键决策，便于排查。
+
+        覆盖：参考视频/音频是否传入、pad_mode、素材角色类型、prompt variant。
+        """
+        roles = [item.get("role") for item in content]
+        pad_mode = getattr(ref, "pad_mode", "back")
+        segments = self._segments(ref)
+        original_total = segments[0][3] if segments else 0.0
+        timestamp_offset = 0.0
+        if pad_mode == "front":
+            timestamp_offset = max(0.0, math.ceil(original_total) - original_total)
+        logger.info(
+            "job-decisions task=%s anchor=%s ref=%s variant=%s pad_mode=%s "
+            "pass_video=%s pass_audio=%s audio_passed_to_seedance=%s roles=%s "
+            "duration=%ss original_total=%.2fs timestamp_offset=%.2fs",
+            self.adapter.name,
+            anchor.key,
+            ref.name,
+            prompt.name,
+            pad_mode,
+            ref.pass_reference_video,
+            ref.pass_reference_audio,
+            bool(ref.audio_file_url),
+            roles,
+            duration,
+            original_total,
+            timestamp_offset,
+        )
+
     def submit(self, run_id: str, candidates: int | None = None, variant: str | None = None, provider: str = "auto") -> RunState:
         errors = self.validate()
         if errors:
@@ -247,6 +282,7 @@ class VideoTaskRunner:
                 audio_asset_key = f"{ref.name}:audio"
                 if ref.audio_file_url and audio_asset_key in assets:
                     content.append({"type": "audio_url", "audio_url": {"url": f"asset://{assets[audio_asset_key]}"}, "role": "reference_audio"})
+                self._log_job_decisions(anchor, ref, prompt, content, duration)
                 for candidate in range(1, count + 1):
                     job_id = f"{_safe(anchor.key)}__{_safe(ref.name)}__{_safe(prompt.name)}__{candidate:02d}"
                     if job_id in existing:

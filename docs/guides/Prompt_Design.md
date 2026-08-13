@@ -1,7 +1,7 @@
 # Seedance Prompt 设计文档
 
-> 版本：V2（七层语义架构）
-> 最后更新：2026-08-12
+> 版本：V2.2（七层语义架构 + Lyrics Timestamp 动态渲染 + 时长对齐 offset）
+> 最后更新：2026-08-13
 > 实现文件：`idolmv_pipeline/video_tasks/prompts.py`
 
 主要任务：对口型、动作模仿、动作 + 对口型
@@ -106,6 +106,63 @@ audio > video > lyrics
 ```
 
 而应该针对具体约束维度决定 reference。
+
+---
+
+## 2.4 Lyrics Timestamp 作为可选时间增强
+
+前端允许用户对歌词逐句手动打点：
+
+```json
+[
+  { "text": "冻结那时间", "time": 1.234 },
+  { "text": "冻结初遇那一天", "time": 5.678 },
+  { "text": "冻结那爱恋", "time": null }
+]
+```
+
+`time` 表示该句歌词对应的人工时间点。该信息用于增强已有的 Lyrics + Audio + Video 对口型约束，但**不改变原来的 Reference Ownership 和 Lip Sync 主结构**。
+
+设计上遵循：
+
+```text
+没有有效 timestamp
+→ 完全使用原 V2 Lyrics Prompt
+
+存在有效 timestamp
+→ 使用 Timestamped Lyrics Prompt
+→ 直接把“歌词 + 时间”写成 Seedance 易理解的任务语言
+→ Audio / Video 的原有职责保持不变
+```
+
+重要原则：
+
+* timestamp 是 **Lyrics 输入的可选增强**，不是新的独立 Performance Contract。
+* `null`、字段语义、校验规则、时间点来源等属于 Builder / 业务层语义，不直接写入 Seedance Prompt。
+* 最终 Prompt 只保留模型真正需要执行的内容，例如“1.23s 开始唱某句”“其余歌词自然衔接”。
+* 当前只有单点 `time` 时，不人为构造不存在的 `start-end` 区间。
+
+### 2.4.1 时间戳与时长对齐（pad_mode）的 offset 规则
+
+时间戳是在**原始音频**上打的，但「前面补齐」会让音频开头插入静音/静止帧，
+导致歌词实际起唱时间整体后移。因此 prompt 里的时间戳需要加上 offset。
+
+| 条件 | offset | 说明 |
+|------|--------|------|
+| `pad_mode = none` / `back` | **0** | 前面不动，无需偏移 |
+| `pad_mode = front` 且未超时长 | `ceil(total) - total` | 前面补的时长，时间轴后移 |
+| 超时长（`total > max_duration`） | **0** | 直接截断，无补齐 |
+
+关键原则：
+
+* 只有「前面补时长」才需要 offset，后面补齐/不补齐都不影响歌词起唱时间。
+* 超时长（视频超过模型上限 30s / 15s）时，时长对齐失去意义，统一按「截断」处理
+  （`pad_mode` 归一为 `none`），offset 必然为 0。
+* offset 的计算与「生成前补齐」「生成后裁剪」三处共用同一个量
+  `Δ = seedance_duration - original_total`，保证逻辑自洽：
+  - front：前面补 `Δ` → 时间戳 +`Δ` → 生成后裁掉前面 `Δ`；
+  - back：后面补 `Δ` → 时间戳不动 → 生成后 `-shortest` 裁掉后面；
+  - none：不补 → 时间戳不动 → 不裁。
 
 ---
 
@@ -431,9 +488,13 @@ dance_lip_sync -> keep_image
 
 # 12. Layer 7 — Lyrics
 
-歌词不再只是 Prompt 最后一条普通文本，而属于 Lip Sync Contract 的正式输入。
+歌词仍属于 Lip Sync Contract 的正式输入。
 
-格式：
+V2.1 只增加一个动态渲染分支：**普通歌词**与**带人工时间点的歌词**。
+
+## 12.1 普通歌词
+
+当 `lyrics_timestamps` 不存在、为空，或全部 `time == null` 时，保持 V2 已确认的 Prompt 不变：
 
 ```text
 演唱 / 说话内容：
@@ -441,14 +502,128 @@ dance_lip_sync -> keep_image
 {lyrics}
 ```
 
-对于存在音频和视频的任务：
+对于存在音频和视频的任务，继续使用：
 
 ```text
 歌词用于明确准确的文字、音节和发音顺序；
 参考音频和视频共同确定对应的实际发音与口型时间。
 ```
 
-歌词、音频和视频三者共同增强口型准确性，不将歌词降级为单纯语义提示。
+即：没有 timestamp 时，不增加任何额外时间说明。
+
+---
+
+## 12.2 带人工时间点的歌词
+
+当 `lyrics_timestamps` 中至少存在一个有效 `time` 时，进入 Timestamped Lyrics 分支。
+
+这里再区分两种情况。
+
+### 全部歌词都有时间
+
+直接采用最简洁的 Seedance 任务语言：
+
+```text
+全程自然对口型唱歌，严格按以下歌词和时间对口型：
+0.74s开始唱“长大后谁不是离家出走”；
+5.10s开始唱“茫茫人海里游”；
+9.70s开始唱“抬起头才发现”；
+11.90s开始唱“流眼泪的星星”。
+
+保持演唱节奏、停顿和嘴部动作与参考音频、视频一致。
+唱完后自然收尾。
+```
+
+这类写法最接近实际 Seedance Prompt 的颗粒度：直接给出“时间 + 歌词”，不解释数据结构。
+
+### 只有部分歌词有时间
+
+完整歌词仍然只写一遍，再单独强化已经人工标注的时间点：
+
+```text
+演唱 / 说话内容：
+冻结那时间
+冻结初遇那一天
+冻结那爱恋
+
+严格按以下已标注时间对口型：
+1.23s开始唱“冻结那时间”；
+5.68s开始唱“冻结初遇那一天”。
+
+其余歌词按原顺序结合参考音频和视频自然衔接。
+保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。
+唱完后自然收尾。
+```
+
+这样不会把未打点的歌词写成工程化的 `null` 状态，也不会对每一行重复“自然衔接”。
+
+> 注：渲染前所有时间点需先加上时长对齐的 offset（`pad_mode=front` 时），规则见 §2.4.1。
+
+---
+
+## 12.3 Prompt 与内部语义分离
+
+接口内部可以存在：
+
+```json
+[
+  { "text": "冻结那时间", "time": 1.234 },
+  { "text": "冻结初遇那一天", "time": 5.678 },
+  { "text": "冻结那爱恋", "time": null }
+]
+```
+
+但最终 Prompt 不输出：
+
+```text
+time = null
+人工 onset
+没有结束时间
+下一句不能作为上一句结束
+```
+
+这些属于 Builder / 业务层语义。
+
+模型侧只保留自然任务语言，例如：
+
+```text
+1.23s开始唱“冻结那时间”；
+5.68s开始唱“冻结初遇那一天”。
+其余歌词按原顺序结合参考音频和视频自然衔接。
+```
+
+当前接口只有单点 `time`，因此 Builder 不主动伪造区间；但这个实现细节也不需要向 Seedance 解释。
+
+---
+
+## 12.4 接口与内部数据
+
+前端已经支持：
+
+```text
+GET  /api/tasks/{id}/lyrics-timestamps
+POST /api/tasks/{id}/lyrics-timestamps
+```
+
+POST body：
+
+```json
+{
+  "lyrics_timestamps": [
+    { "text": "冻结那时间", "time": 1.234 },
+    { "text": "冻结初遇那一天", "time": 5.678 },
+    { "text": "冻结那爱恋", "time": null }
+  ]
+}
+```
+
+字段语义和校验属于 Builder / 业务层：
+
+* `text` 对应歌词框中的一行。
+* `time` 为秒，浮点数；未打点为 `null`。
+* 至少存在一个有效 `time` 才进入 timestamp Prompt 分支。
+* 全部为 `null` 时退化为普通歌词模式。
+* 非法或明显矛盾的数据应在业务层处理，不直接编译进 Prompt。
 
 ---
 
@@ -478,11 +653,17 @@ dance_lip_sync -> keep_image
 
 # 14. 推荐代码结构
 
-不再仅根据是否存在素材逐段追加字符串。
+总体 Prompt Builder 不需要重构，只需要让 Lyrics 输入支持可选 timestamp。
 
 建议抽象：
 
 ```python
+@dataclass
+class LyricsTimestamp:
+    text: str
+    time: float | None
+
+
 @dataclass
 class PromptSpec:
     mode: str
@@ -491,6 +672,7 @@ class PromptSpec:
     video_ref: str | None = None
     audio_ref: str | None = None
     lyrics: str | None = None
+    lyrics_timestamps: list[LyricsTimestamp] | None = None
 
     camera_policy: str = "keep_image"
 
@@ -500,7 +682,7 @@ class PromptSpec:
     constraints: str | None = None
 ```
 
-Prompt Builder：
+Prompt Builder 仍保持原结构：
 
 ```python
 def build_prompt(spec: PromptSpec) -> str:
@@ -519,9 +701,23 @@ def build_prompt(spec: PromptSpec) -> str:
     return "\n\n".join(filter(None, parts))
 ```
 
+只增加一个集中判断：
+
+```python
+def has_lyrics_timestamps(spec: PromptSpec) -> bool:
+    return bool(
+        spec.lyrics_timestamps
+        and any(item.time is not None for item in spec.lyrics_timestamps)
+    )
+```
+
+不要只判断 `lyrics_timestamps is not None`，因为数组可能存在但全部是 `null`。
+
 ---
 
 # 15. Performance Builder
+
+Performance Builder 本身继续沿用 V2：
 
 ```python
 def build_performance(spec):
@@ -539,15 +735,39 @@ def build_performance(spec):
         ])
 ```
 
+`build_lip_sync_contract(spec)` 不需要增加独立的 `Lyrics Timestamp Contract`。
+
+只需要在原 Lip Sync Contract 中调用动态 Lyrics Builder：
+
+```python
+def build_lip_sync_contract(spec):
+    return "\n\n".join(filter(None, [
+        build_lip_sync_core(spec),
+        build_lyrics_input(spec),
+        build_lip_timing(spec),
+        build_lip_micro_motion(spec),
+    ]))
+```
+
+其中真正发生分支的是：
+
+```python
+def build_lyrics_input(spec):
+    if has_lyrics_timestamps(spec):
+        return build_timestamped_lyrics(spec)
+
+    return build_plain_lyrics(spec)
+```
+
 核心变化：
 
-**Lip Sync 被视为一个完整 Contract，而不是 Video / Audio / Lyrics 三段独立 Prompt。**
+**Lip Sync 仍然是原来的完整 Contract；timestamp 只改变 Lyrics 的渲染方式。**
 
 ---
 
 # 16. Lip Sync 动态构建
 
-根据素材存在情况调整，但不改变整体语义。
+Lip Sync 仍然首先根据参考素材是否存在动态构建：
 
 ## Lyrics + Audio + Video
 
@@ -590,6 +810,67 @@ visual lip
 
 根据歌词与参考音频生成自然、符合真实发音规律的嘴形变化。
 ```
+
+---
+
+## Lyrics Rendering 分支
+
+在上述 Reference Availability 之外，再单独判断歌词是否存在有效 timestamp：
+
+```text
+没有 timestamp
+→ build_plain_lyrics()
+
+有 timestamp
+→ build_timestamped_lyrics()
+```
+
+推荐实现：
+
+```python
+def build_plain_lyrics(spec):
+    return f"演唱 / 说话内容：\n\n{spec.lyrics}"
+
+
+def build_timestamped_lyrics(spec):
+    items = [
+        item for item in (spec.lyrics_timestamps or [])
+        if item.text.strip()
+    ]
+    timed = [item for item in items if item.time is not None]
+
+    # 全部歌词都有时间：直接输出 time + lyrics
+    if items and len(timed) == len(items):
+        lines = ["全程自然对口型唱歌，严格按以下歌词和时间对口型："]
+        lines += [
+            f'{item.time:.2f}s开始唱“{item.text.strip()}”；'
+            for item in items
+        ]
+    else:
+        # Partial timestamp：完整歌词写一次，只额外列出已有时间点
+        lines = [
+            "演唱 / 说话内容：",
+            *(item.text.strip() for item in items),
+            "",
+            "严格按以下已标注时间对口型：",
+            *(
+                f'{item.time:.2f}s开始唱“{item.text.strip()}”；'
+                for item in timed
+            ),
+            "其余歌词按原顺序结合参考音频和视频自然衔接。",
+        ]
+
+    lines += [
+        "保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。",
+        "唱完后自然收尾。",
+    ]
+
+    return "\n".join(lines)
+```
+
+小数位建议统一到 2 位左右即可。Seedance 的 Prompt 不需要保留接口浮点数的全部精度。
+
+这里不要输出 `null`、`onset`、`end_time`、`manual timestamp` 等工程字段解释。
 
 ---
 
@@ -709,6 +990,57 @@ visual lip
 
 ---
 
+## 有人工时间戳时的增量模板
+
+`lip_sync` 和 `dance_lip_sync` 的基础模板都保持不变。
+
+当存在有效 timestamp 时，**只替换原来的 Lyrics 输入块**，不重写 Reference Map、Preservation、Camera、Quality，也不新增独立 Timestamp Contract。
+
+### 全部歌词都有 timestamp
+
+原块：
+
+```text
+歌词：
+{lyrics}
+```
+
+替换为：
+
+```text
+全程自然对口型唱歌，严格按以下歌词和时间对口型：
+0.74s开始唱“长大后谁不是离家出走”；
+5.10s开始唱“茫茫人海里游”；
+9.70s开始唱“抬起头才发现”；
+11.90s开始唱“流眼泪的星星”。
+
+保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。
+唱完后自然收尾。
+```
+
+### Partial timestamp
+
+替换为：
+
+```text
+演唱 / 说话内容：
+冻结那时间
+冻结初遇那一天
+冻结那爱恋
+
+严格按以下已标注时间对口型：
+1.23s开始唱“冻结那时间”；
+5.68s开始唱“冻结初遇那一天”。
+
+其余歌词按原顺序结合参考音频和视频自然衔接。
+保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。
+唱完后自然收尾。
+```
+
+这种做法保留了外部优秀 Prompt 示例中“直接给模型时间 + 歌词”的优势，同时不会把前端数据协议暴露给 Seedance。
+
+---
+
 # 18. Prompt 编译原则
 
 最终 Prompt 遵循几个原则：
@@ -771,6 +1103,29 @@ timing / onset / offset / pause
 
 因为目标不仅是“长得像”，更重要的是整个时间序列正确。
 
+### 5. Builder 语义与模型 Prompt 分离
+
+设计文档可以明确：
+
+```text
+time == null
+start-only timestamp
+partial timestamp
+validation / fallback
+```
+
+但这些概念不应原样写给 Seedance。
+
+最终 Prompt 只保留可执行语言：
+
+```text
+1.23s开始唱“……”
+其余歌词按参考音频和视频自然衔接
+保持节奏、停顿和嘴部动作一致
+```
+
+Prompt 的目标是让模型完成任务，而不是让模型理解前端和接口的数据协议。
+
 ---
 
 # 19. 推荐最终架构
@@ -787,6 +1142,8 @@ timing / onset / offset / pause
         image         video      ┌────┼────┐
                                 ↓     ↓    ↓
                              lyrics audio video
+                                │     │    │
+                         optional time │    │
                                 │     │    │
                                 └── Fusion ┘
                                     │
@@ -807,7 +1164,7 @@ timing / onset / offset / pause
 
 **人物、场景、身体动作使用 Reference Ownership。**
 
-**口型使用 Lyrics + Audio + Video Multi-Reference Constraint Fusion。**
+**口型使用 Lyrics + Audio + Video Multi-Reference Constraint Fusion；可选 Lyrics Timestamp 只增强歌词时间表达，不改变原有三源职责。**
 
 Prompt 不再只是：
 

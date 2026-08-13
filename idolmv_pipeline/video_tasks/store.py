@@ -180,7 +180,7 @@ class TaskStore:
             lyrics = path.read_text().strip()
         has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
         camera_policy = task.get("camera_policy")
-        build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy)
+        build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))
 
         result = dict(task)
         result.update(

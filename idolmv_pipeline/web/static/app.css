@@ -310,10 +310,19 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{box-shadow:0 0 0
 .line-redo-placeholder{width:22px;height:22px}
 .lyrics-empty{color:var(--muted);text-align:center;padding:24px 12px;font-size:13px}
 #open-lyrics-timestamps{background:transparent;color:var(--accent);padding:0;font-size:13px;text-decoration:underline}
-.lyrics-entry-row{display:flex;align-items:center;gap:6px;margin-top:2px}
+.lyrics-entry-row{display:flex;align-items:center;gap:8px;margin-top:2px}
+.lyrics-optional-hint{font-size:12px;color:var(--muted)}
 .field-group{display:flex;flex-direction:column;gap:10px;color:var(--muted);align-items:flex-start}
 .field-group .field-label{display:flex;align-items:center;gap:4px;color:var(--muted)}
 .field-group textarea{width:100%;min-height:80px;resize:vertical}
 
 .asset-previews figure.asset-figure{position:relative}.asset-remove{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;z-index:2}.asset-remove:hover{background:rgba(200,54,46,.9)}
 .asset-chips{display:flex;flex-wrap:wrap;gap:6px;min-height:30px;margin-bottom:8px}.asset-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:12px;color:var(--text);max-width:100%}.chip-remove{width:13px;height:13px;border-radius:50%;border:none;background:transparent;color:var(--muted);font-size:8px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}.chip-remove:hover{background:var(--bad);color:#fff}.chips-empty{font-size:12px;color:var(--muted)}
+
+.task-info{display:flex;flex-direction:column;gap:6px;min-width:0}
+.cfg-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.cfg-chip{display:inline-flex;align-items:center;font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+.cfg-chip.cfg-mode{background:var(--accent);color:#fff;border-color:var(--accent)}
+.cfg-chip.cfg-ts{color:var(--good);border-color:var(--good)}
+html[data-theme="dark"] .cfg-chip.cfg-mode{background:#f5f5f7;color:#111;border-color:#f5f5f7}
+html[data-theme="dark"] .cfg-chip.cfg-ts{color:#4ade80;border-color:#4ade80}

@@ -13,7 +13,7 @@
   - `POST /api/extract-audio` — 按文件路径分离音频（不依赖任务是否保存）
   - `GET/POST /api/tasks/{id}/lyrics-timestamps` — 读写歌词时间戳
 - 时间戳数据格式：`[{ "text": "歌词", "time": 1.234 }]`，`time` 为播放秒数，未打点为 `null`
-- 暂不写入 prompt，后端已保存 `lyrics_timestamps` 字段，供后续 prompt 设计使用
+- 时间戳已集成到 prompt 生成（`build_prompt` 新增 `lyrics_timestamps` 参数）：无有效时间戳走普通歌词；全部有时间逐句输出 `时间+歌词`；部分有时间先写完整歌词再列已标注时间点
 - 未保存任务也可打点，时间戳暂存内存，随任务保存一并写入
 - `models.py`/`store.py` 支持 `lyrics_timestamps` 字段透传
 - 歌词编辑器交互：
@@ -23,6 +23,7 @@
   - 「↺」重打时从上一句开始播放（留缓冲），高亮定位到该句；第一句从音频开头播放
   - 打点只覆盖当前句时间点，不影响其它句
   - 顶部帮助 tips 分条展示，说明打点/跳转/重打操作
+  - 「添加时间点」未播放时点击 = 打当前时间点（如第一句 0s）+ 自动播放，播放中点击 = 打点并跳下一句
 
 ### 🌗 深浅色主题
 - 顶部导航栏新增主题切换按钮（🌙/☀️），点击即时切换深浅色，选择存入 `localStorage`
@@ -34,6 +35,7 @@
 - 每个已选文件支持「✕」取消选中（chips 和预览图两处均可），只移除列表、不删除磁盘文件
 - 「选择参考视频」默认进入 `references/` 子目录，标题改为「选择参考音视频」，过滤补充音频格式（mp3/wav/m4a/aac/flac/ogg）
 - 预览区区分音频（`<audio>`）/视频（`<video>`）
+- 任务列表卡片新增配置 chips：模式、时长对齐、音视频传入、时间戳句数、候选数，核心配置直观展示
 
 ### 🐛 修复
 - **上传素材**：`X-Task-Id` 中文编码问题（`encodeURIComponent` + `unquote`），修复中文任务文件夹上传落错目录（乱码目录）
@@ -43,6 +45,17 @@
 - **审核页下载按钮**：去掉重复的自定义下载按钮，仅保留 `<video controls>` 原生下载
 - **Anchor 优化面板**：`<details>` 折叠改普通 div，说明直接显示，消除 toggle 错位
 - **UI 修复**：歌词区/「智能解析」按钮与输入框重叠、`.help-btn` 未定义的 `--border` 变量、`flex:1` 导致 textarea 高度失控
+
+### ⏱ 时间戳 offset 与时长对齐（设计：Prompt_Design.md V2.2）
+- `build_prompt` 新增 `timestamp_offset` 参数：仅 `pad_mode=front` 且未超时长时，时间戳需加 `ceil(total)-total` 的偏移
+- `_timestamp_offset()`（factory.py）：offset 只在前补齐时需要；`none`/`back` 为 0；超时长（> max_duration）必为 0
+- 超时长归一化（runner.py `_segments`）：视频超模型上限时，`pad_mode` 归一为 `none`，直接截断，不再走补齐逻辑
+- 「补齐 → offset → 裁剪」三处共用同一量 `Δ = seedance_duration - original_total`，逻辑自洽（详见 Prompt_Design.md §2.4.1）
+
+### 🔍 生成决策日志
+- 新增 `job-decisions` 日志（runner.py）：记录每个 (anchor, ref, prompt) 的 pad_mode、pass_video/pass_audio、`audio_passed_to_seedance`（音频是否真正传给 Seedance）、素材角色 roles、duration、timestamp_offset
+- 新增 `timestamp-offset` 日志（factory.py）：记录 pad_mode、原始时长、seedance_duration、最终 offset
+- 便于排查「传了视频没勾音频是否误传音频」「pad_mode/offset 计算是否正确」等决策问题
 
 ## [2026-08-12] - 提交密码 HMAC 化、凭据清理、文档完善
 

@@ -227,8 +227,67 @@ _QUALITY = (
 # Layer 7 — Lyrics & Custom
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_lyrics(lyrics: str) -> str:
+def _build_plain_lyrics(lyrics: str) -> str:
     return f"演唱/说话内容：\n{lyrics}"
+
+
+def _has_lyrics_timestamps(lyrics_timestamps) -> bool:
+    """是否存在至少一个有效人工时间点（time 非 None）。
+
+    数组可能为空、不存在，或全部 time == None，这些都视为「无时间戳」。
+    """
+    return bool(
+        lyrics_timestamps
+        and any(item.get("time") is not None for item in lyrics_timestamps)
+    )
+
+
+def _build_timestamped_lyrics(lyrics: str, lyrics_timestamps, timestamp_offset: float = 0.0) -> str:
+    """带人工时间点的歌词渲染。
+
+    设计见 docs/guides/Prompt_Design.md §12.2：
+    - 全部歌词都有时间：直接输出「时间 + 歌词」。
+    - 部分歌词有时间：完整歌词写一遍，再单独列出已标注的时间点。
+    不把 null / onset / end_time 等工程字段写进 prompt。
+
+    timestamp_offset：时间戳偏移量（秒）。当 pad_mode="front" 时，
+    音频前面补了静音，实际起唱时间整体后移，需把每个时间点加上该偏移。
+    """
+    items = [
+        item for item in (lyrics_timestamps or [])
+        if str(item.get("text", "")).strip()
+    ]
+    timed = [item for item in items if item.get("time") is not None]
+
+    def _ts(item):
+        return item["time"] + timestamp_offset
+
+    if items and len(timed) == len(items):
+        # 全部歌词都有时间
+        lines = ["全程自然对口型唱歌，严格按以下歌词和时间对口型："]
+        lines += [
+            f'{_ts(item):.2f}s开始唱“{str(item["text"]).strip()}”；'
+            for item in items
+        ]
+    else:
+        # 部分歌词有时间（或时间戳文本与歌词框不一致时的兜底）
+        lines = ["演唱/说话内容：", lyrics]
+        if timed:
+            lines += [
+                "",
+                "严格按以下已标注时间对口型：",
+                *(
+                    f'{_ts(item):.2f}s开始唱“{str(item["text"]).strip()}”；'
+                    for item in timed
+                ),
+                "其余歌词按原顺序结合参考音频和视频自然衔接。",
+            ]
+
+    lines += [
+        "保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。",
+        "唱完后自然收尾。",
+    ]
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -242,6 +301,8 @@ def build_prompt(
     has_audio_ref: bool = False,
     has_video_ref: bool = True,
     camera_policy: CameraPolicy | None = None,
+    lyrics_timestamps: list[dict] | None = None,
+    timestamp_offset: float = 0.0,
 ) -> str:
     """按 V2 七层语义架构构建 Seedance prompt。
 
@@ -252,6 +313,11 @@ def build_prompt(
         has_audio_ref: 是否有参考音频
         has_video_ref: 是否有参考视频（纯音频对口型时为 False）
         camera_policy: 镜头策略，None 时使用模式默认值
+        lyrics_timestamps: 歌词人工时间点（可选），格式 [{text, time}]，
+            time 为秒（float），未打点为 None。仅当存在有效 time 时才进入
+            带时间戳的歌词分支，否则退化为普通歌词。
+        timestamp_offset: 时间戳偏移量（秒）。pad_mode="front" 时音频前面
+            补静音导致起唱时间后移，需传入 ceil(total)-total 作为偏移。
     """
     lyrics = str(lyrics or "").strip()
     constraints = str(constraints or "").strip()
@@ -288,7 +354,10 @@ def build_prompt(
 
     # Layer 7 — Lyrics & Custom
     if lyrics:
-        parts.append(_build_lyrics(lyrics))
+        if _has_lyrics_timestamps(lyrics_timestamps):
+            parts.append(_build_timestamped_lyrics(lyrics, lyrics_timestamps, timestamp_offset))
+        else:
+            parts.append(_build_plain_lyrics(lyrics))
     if constraints:
         parts.append(f"额外要求：\n{constraints}")
 

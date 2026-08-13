@@ -184,7 +184,7 @@ http://127.0.0.1:8913/
 
 ## 🎤 歌词时间戳（滚动歌词）
 
-对口型/口型+动作任务可制作滚动歌词：歌词框下方点「制作滚动歌词 >」，播放音视频后逐句打时间点。快捷键：空格播放/暂停、Enter 打点、↑/↓ 切行、Esc 关闭。详见 [guides/Singing_Video_Guide.md](guides/Singing_Video_Guide.md)。
+对口型/口型+动作任务可为歌词逐句打时间点（可选）：歌词框下方点「打时间戳（可选）>」，播放音视频后逐句打点。快捷键：空格播放/暂停、Enter 打点、↑/↓ 切行、Esc 关闭。不打时间戳也能正常生成。注意：参考视频用「前面补齐」时，时间戳会自动加偏移对齐。详见 [guides/Singing_Video_Guide.md](guides/Singing_Video_Guide.md)。
 
 ## 🧩 Anchor 模块快速指南
 
