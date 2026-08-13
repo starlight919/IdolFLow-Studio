@@ -1,0 +1,688 @@
+from __future__ import annotations
+
+import json
+import mimetypes
+import shutil
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlparse
+
+from idolmv_pipeline.image_tasks.prompts import build_anchor_prompt, preset_options
+from idolmv_pipeline.image_tasks.models import AnchorTask
+from idolmv_pipeline.review.publisher import Publisher, safe_name
+from idolmv_pipeline.video_tasks.factory import adapter_from_task
+from idolmv_pipeline.video_tasks.prompts import build_prompt
+
+STATIC_DIR = Path(__file__).resolve().parents[1] / "web" / "static"
+
+# ── Route Registry ───────────────────────────────────────────────────────────
+
+_ROUTES: dict[str, list[tuple[str, callable]]] = {"GET": [], "POST": [], "DELETE": []}
+
+
+def _register(method: str, path: str):
+    """Decorator / factory: register a handler for ``method`` + ``path``.
+
+    ``path`` can be:
+    - an exact path like ``"/api/tasks"``
+    - a prefix path like ``"/api/anchor-tasks/"`` (matches ``/api/anchor-tasks/<id>``)
+    - a multi-segment prefix like ``"/api/anchor-runs/"``
+    """
+    def decorator(func):
+        _ROUTES[method].append((path, func))
+        return func
+    return decorator
+
+
+def dispatch(handler: BaseHTTPRequestHandler, method: str, path: str) -> bool:
+    """Try every registered handler; return True if one consumed the request.
+
+    Routes are tried longest-prefix-first so that ``/api/tasks`` is matched
+    before the catch-all ``/`` route.
+    """
+    routes = sorted(_ROUTES.get(method, []), key=lambda r: -len(r[0]))
+    for prefix, func in routes:
+        if path == prefix.rstrip("/") or path.startswith(prefix):
+            func(handler, path)
+            return True
+    return False
+
+
+# ── Simple in-memory TTL helpers ─────────────────────────────────────────────
+
+_INTERMEDIATE_CACHE: dict[str, tuple[float, dict]] = {}
+_INTERMEDIATE_CACHE_TTL = 3.0  # seconds — balances freshness vs. filesystem I/O
+
+
+def _cached_get_intermediate(handler, run_id: str) -> None:
+    """Return cached intermediate results if fresh, otherwise re-scan."""
+    now = time.monotonic()
+    entry = _INTERMEDIATE_CACHE.get(run_id)
+    if entry is not None:
+        expire_at, result = entry
+        if now < expire_at:
+            return json_response(handler, 200, result)
+    _get_intermediate_for_run(handler, run_id)
+
+def json_response(handler, status: int, data) -> None:
+    body = json.dumps(data, ensure_ascii=False).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    if handler.command != "HEAD":
+        handler.wfile.write(body)
+
+
+def read_json(handler) -> dict:
+    length = int(handler.headers.get("Content-Length", 0))
+    return json.loads(handler.rfile.read(length) or b"{}")
+
+
+def serve_file(handler, path: Path, content_type: str | None = None,
+               download_name: str | None = None, root: Path | None = None) -> None:
+    resolved = path.resolve()
+    if root is not None:
+        root = root.resolve()
+        if root not in resolved.parents and resolved != root:
+            raise FileNotFoundError(path)
+    if not resolved.is_file():
+        raise FileNotFoundError(path)
+    size = resolved.stat().st_size
+    start, end = 0, size - 1
+    range_header = handler.headers.get("Range")
+    status = 200
+    if range_header and range_header.startswith("bytes="):
+        bounds = range_header[6:].split("-", 1)
+        start = int(bounds[0] or 0)
+        end = min(int(bounds[1]) if bounds[1] else end, end)
+        if start < 0 or start >= size or end < start:
+            handler.send_response(416)
+            handler.send_header("Content-Range", f"bytes */{size}")
+            handler.end_headers()
+            return
+        status = 206
+
+    handler.send_response(status)
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Content-Type",
+                        content_type or mimetypes.guess_type(resolved.name)[0] or "application/octet-stream")
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("Content-Length", str(end - start + 1))
+    if status == 206:
+        handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    if download_name:
+        handler.send_header("Content-Disposition",
+                            f"attachment; filename*=UTF-8''{quote(download_name)}")
+    handler.end_headers()
+    if handler.command == "HEAD":
+        return
+
+    remaining = end - start + 1
+    try:
+        with resolved.open("rb") as source:
+            source.seek(start)
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+                remaining -= len(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
+def find_candidate(manifest: dict, candidate_id: str) -> dict:
+    for candidate in manifest["candidates"]:
+        if candidate["id"] == candidate_id:
+            return candidate
+    raise KeyError(candidate_id)
+
+
+# ── Handlers: Static & File ──────────────────────────────────────────────────
+
+@_register("GET", "/static/")
+def handle_static(handler, path: str):
+    serve_file(handler, STATIC_DIR / path.removeprefix("/static/"), root=STATIC_DIR)
+
+
+@_register("GET", "/")
+@_register("GET", "/tasks")
+@_register("GET", "/runs")
+@_register("GET", "/review")
+def handle_index(handler, path: str):
+    serve_file(handler, STATIC_DIR / "index.html", "text/html; charset=utf-8")
+
+
+@_register("GET", "/api/settings/public")
+def handle_public_settings(handler, path: str):
+    json_response(handler, 200, handler.app.config.public_dict())
+
+
+@_register("GET", "/api/file-preview")
+def handle_file_preview(handler, path: str):
+    parsed = urlparse(handler.path)
+    query = parse_qs(parsed.query)
+    root_name = query.get("root", ["data_root"])[0]
+    if root_name not in {"data_root", "upload_root"}:
+        raise ValueError("invalid root")
+    filepath = handler.app.config.resolve_inside(root_name, query.get("path", [""])[0])
+    serve_file(handler, filepath)
+
+
+@_register("GET", "/api/files")
+def handle_list_files(handler, path: str):
+    parsed = urlparse(handler.path)
+    _list_files(handler, parsed)
+
+
+@_register("GET", "/api/intermediate/")
+def handle_intermediate_results(handler, path: str):
+    parts = path.strip("/").split("/")
+    run_id = parts[2]
+    try:
+        _cached_get_intermediate(handler, run_id)
+    except Exception as exc:
+        json_response(handler, 404, {"error": str(exc)})
+
+
+def _list_files(handler, parsed) -> None:
+    query = parse_qs(parsed.query)
+    root_name = query.get("root", ["data_root"])[0]
+    if root_name not in {"data_root", "upload_root"}:
+        raise ValueError("invalid root")
+    directory = handler.app.config.resolve_inside(root_name, query.get("path", [""])[0])
+    if not directory.is_dir():
+        raise FileNotFoundError(directory)
+    root = getattr(handler.app.config, root_name)
+    items = [{
+        "name": item.name, "path": item.relative_to(root).as_posix(), "directory": item.is_dir(),
+        "size": item.stat().st_size if item.is_file() else None,
+    } for item in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())) if not item.name.startswith(".")]
+    json_response(handler, 200, {"root": root_name, "path": directory.relative_to(root).as_posix(), "items": items})
+
+
+@_register("POST", "/api/folders")
+def handle_folder_create(handler, path: str):
+    data = read_json(handler)
+    root_name = data.get("root", "data_root")
+    if root_name not in {"data_root", "upload_root"}:
+        return json_response(handler, 400, {"error": "invalid root"})
+    parent = handler.app.config.resolve_inside(root_name, data.get("parent", ""))
+    if not parent.is_dir():
+        return json_response(handler, 404, {"error": "parent not found"})
+    name = str(data.get("name", "")).strip()
+    if not name or "/" in name or "\\" in name:
+        return json_response(handler, 400, {"error": "invalid folder name"})
+    new_dir = parent / name
+    if new_dir.exists():
+        return json_response(handler, 409, {"error": "folder already exists"})
+    new_dir.mkdir(parents=True)
+    root = getattr(handler.app.config, root_name)
+    json_response(handler, 201, {"name": name, "path": new_dir.relative_to(root).as_posix()})
+
+
+def _get_intermediate_for_run(handler, run_id: str) -> None:
+    job = handler.app.jobs.get(run_id)
+    task = handler.app.store.get(job["task_id"])
+    adapter = adapter_from_task(task, handler.app.config, handler.app.store)
+    output_dir = adapter.output_dir / run_id
+
+    if not output_dir.exists():
+        return json_response(handler, 200, {"run_id": run_id, "status": job["status"], "intermediates": [], "message": "输出目录尚未创建"})
+
+    intermediates = []
+    seedance_dirs = sorted(output_dir.glob("*/seedance"), key=lambda p: p.stat().st_mtime)
+
+    for seedance_dir in seedance_dirs:
+        state_file = seedance_dir / "state.json"
+        assets_file = seedance_dir / "assets.json"
+
+        state_data = {}
+        if state_file.exists():
+            try:
+                state_data = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        assets_data = {}
+        if assets_file.exists():
+            try:
+                assets_data = json.loads(assets_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        video_files = list(seedance_dir.glob("*.mp4"))
+        intermediates.append({
+            "job_name": seedance_dir.parent.name,
+            "state": state_data.get("status", "unknown"),
+            "message": state_data.get("message", ""),
+            "assets": assets_data,
+            "video_count": len(video_files),
+            "videos": [{"path": str(v.relative_to(output_dir)), "name": v.name, "size": v.stat().st_size} for v in video_files],
+            "updated_at": state_file.stat().st_mtime if state_file.exists() else None,
+        })
+
+    json_response(handler, 200, {
+        "run_id": run_id, "status": job["status"], "stage": job["stage"],
+        "message": job["message"], "completed": job["completed"], "total": job["total"],
+        "intermediates": intermediates,
+    })
+    # Cache for reuse by frontend polling (avoids repeated filesystem scans)
+    _INTERMEDIATE_CACHE[run_id] = (time.monotonic() + _INTERMEDIATE_CACHE_TTL, {
+        "run_id": run_id, "status": job["status"], "stage": job["stage"],
+        "message": job["message"], "completed": job["completed"], "total": job["total"],
+        "intermediates": intermediates,
+    })
+
+
+# ── Handlers: Anchor ─────────────────────────────────────────────────────────
+
+@_register("GET", "/api/anchor-presets")
+def handle_anchor_presets(handler, path: str):
+    json_response(handler, 200, preset_options())
+
+
+@_register("POST", "/api/anchor-optimize")
+def handle_anchor_optimize(handler, path: str):
+    """Optimize natural-language prompt into structured constraints + canonical prompt."""
+    from idolmv_pipeline.image_tasks.optimizer import optimize
+    data = read_json(handler)
+    text = str(data.get("text", "")).strip()
+    if not text:
+        return json_response(handler, 400, {"error": "请提供图文合成描述"})
+    reference_names = data.get("references") if isinstance(data.get("references"), list) else []
+    try:
+        result = optimize(text, reference_names or None)
+        json_response(handler, 200, result)
+    except ValueError as e:
+        json_response(handler, 400, {"error": str(e)})
+
+
+@_register("GET", "/api/anchor-tasks/")
+def handle_anchor_tasks_list(handler, path: str):
+    if path.rstrip("/") == "/api/anchor-tasks":
+        return json_response(handler, 200, handler.app.anchor_store.list())
+    # GET /api/anchor-tasks/<id>
+    task_id = unquote(path.strip("/").split("/")[2])
+    json_response(handler, 200, handler.app.anchor_store.get(task_id))
+
+
+@_register("POST", "/api/anchor-tasks")
+def handle_anchor_task_save(handler, path: str):
+    # Check for recover sub-action: POST /api/anchor-tasks/<id>/recover
+    parts = path.strip("/").split("/")
+    if len(parts) >= 4 and parts[3] == "recover":
+        task_id = unquote(parts[2])
+        try:
+            return json_response(handler, 201, handler.app.anchor_store.recover(task_id))
+        except (FileNotFoundError, ValueError) as e:
+            return json_response(handler, 400, {"error": str(e)})
+    # Normal save
+    json_response(handler, 201, handler.app.anchor_store.save(read_json(handler)))
+
+
+@_register("GET", "/api/anchor-tasks/orphaned")
+def handle_anchor_tasks_orphaned(handler, path: str):
+    json_response(handler, 200, handler.app.anchor_store.list_orphaned())
+
+
+@_register("DELETE", "/api/anchor-tasks/")
+def handle_anchor_task_delete(handler, path: str):
+    task_id = unquote(path.strip("/").split("/")[2])
+    handler.app.anchor_store.delete(task_id)
+    handler.send_response(204)
+    handler.end_headers()
+
+
+@_register("POST", "/api/anchor-prompt-preview")
+def handle_anchor_prompt_preview(handler, path: str):
+    task = AnchorTask.from_dict(read_json(handler))
+    prompt, references = build_anchor_prompt(task)
+    json_response(handler, 200, {"prompt": prompt, "references": references})
+
+
+@_register("GET", "/api/anchor-runs/")
+def handle_anchor_runs_get(handler, path: str):
+    if path.rstrip("/") == "/api/anchor-runs":
+        return json_response(handler, 200, handler.app.anchor_jobs.list())
+    # /api/anchor-runs/<run_id>/<action>...
+    parts = path.strip("/").split("/")
+    run_id = parts[2]
+    if len(parts) == 3:
+        return json_response(handler, 200, handler.app.anchor_jobs.get(run_id))
+    job = handler.app.anchor_jobs.get(run_id)
+    manifest_path = _resolve_anchor_manifest(handler, job, run_id)
+    manifest = json.loads(manifest_path.read_text())
+    action = parts[3]
+    if action == "manifest":
+        _, state = handler.app.review_state(manifest_path)
+        manifest["review_state"] = state
+        return json_response(handler, 200, manifest)
+    if action in {"media", "download"} and len(parts) == 5:
+        candidate = find_candidate(manifest, unquote(parts[4]))
+        source = Path(candidate["file"]).resolve()
+        generated_root = handler.app.anchor_store.generated_dir(job["task_id"], run_id).resolve()
+        if generated_root not in source.parents:
+            raise ValueError("candidate file is outside the anchor run")
+        download_name = f"{safe_name(job['task_name'])}_{candidate['id']}.jpg" if action == "download" else None
+        content_type = "image/jpeg"
+        return serve_file(handler, source, content_type, download_name)
+    handler.send_error(404)
+
+
+@_register("POST", "/api/anchor-runs/")
+def handle_anchor_runs_post(handler, path: str):
+    if path.rstrip("/") == "/api/anchor-runs":
+        data = read_json(handler)
+        supplied = str(data.pop("password", ""))
+        if not handler.app.config.verify_submit_password(supplied):
+            return json_response(handler, 403, {"error": "提交密码错误或未配置（请用 scripts/gen_password.py 生成并写入 .env）"})
+        return json_response(handler, 202, handler.app.anchor_jobs.submit(data["task_id"], data.get("candidates")))
+    # /api/anchor-runs/<run_id>/<action>
+    parts = path.strip("/").split("/")
+    run_id, action = parts[2], parts[3]
+    if action == "resume":
+        try:
+            handler.app.anchor_jobs._resume_from_state(run_id)
+            return json_response(handler, 200, {"ok": True})
+        except Exception as exc:
+            return json_response(handler, 400, {"error": str(exc)})
+    data = read_json(handler)
+    job = handler.app.anchor_jobs.get(run_id)
+    manifest_path = _resolve_anchor_manifest(handler, job, run_id)
+    manifest = json.loads(manifest_path.read_text())
+    candidate = find_candidate(manifest, data["id"])
+    state_path, state = handler.app.review_state(manifest_path)
+    if action == "vote":
+        with handler.app.review_lock:
+            state["votes"][data["id"]] = data["vote"]
+            handler.app.save_review_state(state_path, state)
+        return json_response(handler, 200, {"ok": True})
+    if action == "promote":
+        source = Path(candidate["file"]).resolve()
+        data_dir = job["task_id"]  # anchor task_id is the data_dir
+        selected_dir = handler.app.anchor_store.selected_dir(data_dir)
+        selected_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{safe_name(job['task_name'])}_{safe_name(run_id)}_{candidate['candidate']:02d}.jpg"
+        destination = selected_dir / filename
+        if not destination.exists():
+            temporary = destination.with_suffix(".tmp")
+            shutil.copy2(source, temporary)
+            temporary.replace(destination)
+        # Relative path from the data directory root, so video tasks can
+        # reference it as ``anchors/selected/<filename>``.
+        data_root = handler.app.anchor_store.data_root_dir(data_dir)
+        relative = destination.relative_to(data_root).as_posix()
+        with handler.app.review_lock:
+            state["published"][data["id"]] = {"filename": filename, "file": relative}
+            handler.app.save_review_state(state_path, state)
+        return json_response(handler, 200, state["published"][data["id"]])
+    handler.send_error(404)
+
+
+# ── Handlers: Task ───────────────────────────────────────────────────────────
+
+@_register("GET", "/api/tasks/")
+def handle_tasks_get(handler, path: str):
+    if path.rstrip("/") == "/api/tasks":
+        return json_response(handler, 200, handler.app.store.list())
+    parts = path.strip("/").split("/")
+    task_id = unquote(parts[2])
+    if len(parts) == 4 and parts[3] == "assets":
+        return json_response(handler, 200, _task_assets(handler, task_id))
+    json_response(handler, 200, handler.app.store.get(task_id))
+
+
+@_register("POST", "/api/tasks")
+def handle_tasks_post(handler, path: str):
+    full = urlparse(handler.path)
+    parts = full.path.strip("/").split("/")
+    if len(parts) == 4 and parts[3] == "clear-assets":
+        task_id = unquote(parts[2])
+        category = parse_qs(full.query).get("category", [None])[0]
+        removed = handler.app.store.clear_assets(task_id, category=category)
+        return json_response(handler, 200, {"ok": True, "removed": removed})
+    data = read_json(handler)
+    json_response(handler, 201, handler.app.store.save(data))
+
+
+@_register("DELETE", "/api/tasks/")
+def handle_tasks_delete(handler, path: str):
+    full = urlparse(handler.path)
+    task_id = unquote(full.path.strip("/").split("/")[2])
+    remove_files = parse_qs(full.query).get("remove_files", ["0"])[0] == "1"
+    try:
+        handler.app.store.delete(task_id)
+        if remove_files:
+            # Cascade: delete all runs associated with this task + their output dirs
+            data_dir = task_id.split("__")[0] if "__" in task_id else task_id
+            for run_id, job in list(handler.app.jobs.jobs.items()):
+                if job.get("task_id") == task_id:
+                    try:
+                        handler.app.jobs.delete(run_id, remove_files=True)
+                    except KeyError:
+                        pass
+        handler.send_response(204)
+        handler.end_headers()
+    except KeyError:
+        json_response(handler, 404, {"error": f"task not found: {task_id}"})
+
+
+@_register("POST", "/api/prompt-preview")
+def handle_prompt_preview(handler, path: str):
+    data = read_json(handler)
+    has_audio = any(ref.get("pass_reference_audio", True) for ref in data.get("references", []))
+    camera_policy = data.get("camera_policy")
+    json_response(handler, 200, {"prompt": build_prompt(data["mode"], data.get("lyrics", ""), data.get("constraints", ""), has_audio_ref=has_audio, camera_policy=camera_policy)})
+
+
+def _task_assets(handler, task_id: str) -> dict:
+    task = handler.app.store.get(task_id)
+    adapter = adapter_from_task(task, handler.app.config, handler.app.store)
+    path = adapter.assets_file
+    assets = json.loads(path.read_text()) if path.is_file() else {}
+    items = []
+    for key, value in assets.items():
+        if key.endswith("__source"):
+            continue
+        items.append({"key": key, "asset_id": value, "source": assets.get(f"{key}__source")})
+    return {"task_id": task_id, "path": str(path), "items": items}
+
+
+@_register("POST", "/api/uploads")
+def handle_upload(handler, path: str):
+    task_id = handler.headers.get("X-Task-Id", "").strip()
+    filename = Path(unquote(handler.headers.get("X-Filename", ""))).name
+    category = handler.headers.get("X-Category", "references")
+    if not task_id or not filename or category not in {"anchors", "references", "anchor-references"}:
+        raise ValueError("task, filename and valid category are required")
+    # Anchor references live under <data_dir>/anchors/, not <data_dir>/ directly.
+    subdir = "anchors/anchor-references" if category == "anchor-references" else category
+    root = handler.app.config.resolve_inside("upload_root", task_id)
+    destination = (root / subdir / filename).resolve()
+    if root not in destination.parents:
+        raise ValueError("invalid upload path")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{filename}.{uuid.uuid4().hex}.upload")
+    remaining = int(handler.headers.get("Content-Length", 0))
+    with temporary.open("wb") as output:
+        while remaining:
+            chunk = handler.rfile.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError("upload ended early")
+            output.write(chunk)
+            remaining -= len(chunk)
+    temporary.replace(destination)
+    # Return the path relative to the data_dir, prefixed with ``anchors/`` for
+    # anchor-references so AnchorTaskStore can resolve them correctly.
+    relative = destination.relative_to(root).as_posix()
+    json_response(handler, 201, {"file": relative, "size": destination.stat().st_size})
+
+
+# ── Handlers: Run (Video) ────────────────────────────────────────────────────
+
+@_register("GET", "/api/runs/")
+def handle_runs_get(handler, path: str):
+    if path.rstrip("/") == "/api/runs":
+        return json_response(handler, 200, handler.app.jobs.list())
+    parts = path.strip("/").split("/")
+    run_id = parts[2]
+    if len(parts) == 3:
+        return json_response(handler, 200, handler.app.jobs.get(run_id))
+    action = parts[3]
+    if action == "manifest":
+        manifest_path, manifest = handler.app.manifest(run_id)
+        _, state = handler.app.review_state(manifest_path)
+        manifest["review_state"] = state
+        return json_response(handler, 200, manifest)
+    if action in {"media", "download"} and len(parts) == 5:
+        return _candidate_file(handler, run_id, unquote(parts[4]), action == "download")
+    if action == "publish-status":
+        return json_response(handler, 200, handler.app.publish_progress.get(run_id, {"running": False, "step": "idle", "message": "尚未发布"}))
+    if action == "intermediate":
+        return _get_intermediate_for_run(handler, run_id)
+    if action == "resume":
+        try:
+            handler.app.jobs._resume_from_state(run_id)
+            return json_response(handler, 200, {"ok": True})
+        except Exception as exc:
+            return json_response(handler, 400, {"error": str(exc)})
+    handler.send_error(404)
+
+
+@_register("DELETE", "/api/runs/")
+def handle_runs_delete(handler, path: str):
+    full = urlparse(handler.path)
+    run_id = unquote(full.path.strip("/").split("/")[2])
+    remove_files = parse_qs(full.query).get("remove_files", ["0"])[0] == "1"
+    try:
+        handler.app.jobs.delete(run_id, remove_files=remove_files)
+        handler.send_response(204)
+        handler.end_headers()
+    except KeyError:
+        json_response(handler, 404, {"error": f"run not found: {run_id}"})
+
+
+@_register("POST", "/api/runs/")
+def handle_runs_post(handler, path: str):
+    if path.rstrip("/") == "/api/runs":
+        data = read_json(handler)
+        supplied = str(data.pop("password", ""))
+        if not handler.app.config.verify_submit_password(supplied):
+            return json_response(handler, 403, {"error": "提交密码错误或未配置（请用 scripts/gen_password.py 生成并写入 .env）"})
+        return json_response(handler, 202, handler.app.jobs.submit(data["task_id"], data.get("candidates")))
+    # /api/runs/<run_id>/<action>
+    parts = path.strip("/").split("/")
+    if len(parts) < 4:
+        return json_response(handler, 400, {"error": "missing action"})
+    run_id, action = parts[2], parts[3]
+    data = read_json(handler)
+    manifest_path, manifest = handler.app.manifest(run_id)
+    if action == "vote":
+        find_candidate(manifest, data["id"])
+        with handler.app.review_lock:
+            state_path, state = handler.app.review_state(manifest_path)
+            state["votes"][data["id"]] = data["vote"]
+            handler.app.save_review_state(state_path, state)
+        return json_response(handler, 200, {"ok": True})
+    if action == "publish":
+        if not handler.app.config.publish_enabled:
+            return json_response(handler, 403, {"error": "当前机器未启用 Git 发布，请直接下载候选视频"})
+        return _start_publish(handler, run_id, manifest_path, manifest, data["id"])
+    handler.send_error(404)
+
+
+def _candidate_file(handler, run_id: str, candidate_id: str, download: bool) -> None:
+    manifest_path, manifest = handler.app.manifest(run_id)
+    candidate = find_candidate(manifest, candidate_id)
+    source = Path(candidate.get("file", "")).resolve() if candidate.get("file") else (manifest_path.parents[2] / candidate["path"]).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    filename = "_".join((
+        safe_name(manifest["publish"]["filename_prefix"]), safe_name(candidate["anchor"]),
+        safe_name(candidate["reference"]), safe_name(candidate["variant"]),
+        f"candidate-{int(candidate['candidate']):02d}.mp4",
+    ))
+    serve_file(handler, source, "video/mp4", filename if download else None)
+
+
+def _start_publish(handler, run_id: str, manifest_path: Path, manifest: dict, candidate_id: str) -> None:
+    progress = handler.app.publish_progress.setdefault(run_id, {"running": False})
+    if progress.get("running"):
+        return json_response(handler, 409, progress)
+    candidate = find_candidate(manifest, candidate_id)
+    progress.update(running=True, step="starting", message="准备发布", error="")
+
+    def update(step, message):
+        progress.update(step=step, message=message)
+
+    def work():
+        try:
+            publish = manifest["publish"]
+            publisher = Publisher(Path(publish["repo"]), publish["subdirectory"], publish["filename_prefix"], update)
+            source = Path(candidate.get("file", "")).resolve() if candidate.get("file") else manifest_path.parents[2] / candidate["path"]
+            result = publisher.publish(source, candidate)
+            with handler.app.review_lock:
+                state_path, state = handler.app.review_state(manifest_path)
+                state["published"][candidate_id] = result
+                handler.app.save_review_state(state_path, state)
+            progress.update(running=False, step="done", message=f"发布成功：{result['filename']}", result=result)
+        except Exception as exc:
+            progress.update(running=False, step="failed", message="发布失败", error=str(exc))
+
+    threading.Thread(target=work, daemon=True).start()
+    json_response(handler, 202, progress)
+
+
+@_register("DELETE", "/api/anchor-runs/")
+def handle_anchor_runs_delete(handler, path: str):
+    full = urlparse(handler.path)
+    parts = full.path.strip("/").split("/")
+    if len(parts) != 3:
+        handler.send_error(400)
+        return
+    run_id = parts[2]
+    remove_files = parse_qs(full.query).get("remove_files", ["0"])[0] == "1"
+    try:
+        handler.app.anchor_jobs.delete(run_id, remove_files=remove_files)
+        json_response(handler, 200, {"ok": True})
+    except KeyError:
+        json_response(handler, 404, {"error": f"anchor run not found: {run_id}"})
+
+
+# ── Error handling helpers ───────────────────────────────────────────────────
+
+def handle_error(handler, exc: Exception) -> bool:
+    """Centralized error-to-response mapping. Returns True if handled."""
+    if isinstance(exc, (KeyError, FileNotFoundError)):
+        json_response(handler, 404, {"error": str(exc)})
+        return True
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        json_response(handler, 400, {"error": str(exc)})
+        return True
+    import logging
+    logging.getLogger("web").error("Unhandled %s %s: %s", handler.command, handler.path, exc, exc_info=True)
+    return False
+
+
+def _resolve_anchor_manifest(handler, job: dict, run_id: str) -> Path:
+    """Resolve anchor manifest path, fixing stale paths from pre-refactor era."""
+    manifest_path = Path(job.get("manifest", ""))
+    if not manifest_path.is_file():
+        task_id = job.get("task_id", "")
+        if task_id:
+            fallback = handler.app.anchor_store.generated_dir(task_id, run_id) / "review_manifest.json"
+            if fallback.is_file():
+                manifest_path = fallback
+                # Update stale path in job record
+                with handler.app.anchor_jobs.lock:
+                    if run_id in handler.app.anchor_jobs.jobs:
+                        handler.app.anchor_jobs.jobs[run_id]["manifest"] = str(fallback)
+                        handler.app.anchor_jobs._save(handler.app.anchor_jobs.jobs[run_id])
+    if not manifest_path.is_file():
+        raise FileNotFoundError("anchor manifest is not available")
+    return manifest_path

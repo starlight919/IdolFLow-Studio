@@ -1,0 +1,25 @@
+{
+  "id": "replace-me",
+  "name": "Replace Me",
+  "mode": "lip_sync",
+  "candidates": 4,
+  "anchors": [
+    {
+      "key": "main",
+      "label": "主 Anchor",
+      "file": "anchors/main.png"
+    }
+  ],
+  "references": [
+    {
+      "name": "main",
+      "file": "references/reference.mov",
+      "duration": 15,
+      "pass_reference_audio": true,
+      "pass_reference_video": true,
+      "pad_mode": "none"
+    }
+  ],
+  "lyrics_file": "lyrics.txt",
+  "constraints": "保持人物身份、服装和背景一致"
+}

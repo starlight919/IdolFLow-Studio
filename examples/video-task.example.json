@@ -1,0 +1,26 @@
+{
+  "id": "example-video-task",
+  "name": "示例视频任务",
+  "mode": "dance_lip_sync",
+  "candidates": 4,
+  "filename_prefix": "example",
+  "anchors": [
+    {
+      "key": "anchor-1",
+      "label": "Anchor 1",
+      "file": "anchors/person.jpg"
+    }
+  ],
+  "references": [
+    {
+      "name": "reference-1",
+      "file": "references/reference.mp4",
+      "duration": 15,
+      "pass_reference_audio": true,
+      "pass_reference_video": true,
+      "pad_mode": "none"
+    }
+  ],
+  "lyrics": "在此填写逐行歌词",
+  "constraints": "人物身份和服装保持一致"
+}

@@ -1,0 +1,42 @@
+{
+  "id": "example-anchor-task",
+  "name": "示例 Anchor 任务",
+  "description": "生成可用于视频首帧的写实人物图片",
+  "negative": "不要畸形手、重复人物",
+  "size": "1024x1792",
+  "resolution": "2K",
+  "candidates": 4,
+  "model": "gpt-image-2",
+  "aspects": [
+    {
+      "key": "identity_face",
+      "description": "保持人物身份和五官",
+      "priority": "locked"
+    },
+    {
+      "key": "hair_style",
+      "description": "自然真实的发型",
+      "priority": "required"
+    }
+  ],
+  "references": [
+    {
+      "id": "ref-1",
+      "file": "anchor-references/person.jpg",
+      "bindings": [
+        {
+          "aspect": "identity_face",
+          "content": "脸型、眼睛、鼻子",
+          "constraint": "严格保持身份，不参考妆容"
+        },
+        {
+          "aspect": "hair_style",
+          "content": "长度、刘海、发色",
+          "constraint": "保持轮廓，发丝自然"
+        }
+      ],
+      "note": "忽略背景和服装",
+      "remove_watermark": false
+    }
+  ]
+}

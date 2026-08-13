@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Credentials
+.env
+
+# Internal API docs (company-internal gateway details, keep out of public repo)
+docs/api/
+
+# Dev-only sync script (keeps the dual-repo workflow internal)
+scripts/sync-repos.sh
+
+# Runtime data and generated media
+data/*
+!data/.gitkeep
+runtime/*
+!runtime/.gitkeep
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+
+# Local state
+.seedance_tunnel.json
+*.log
+workspace.pid
+.DS_Store
+.vscode/

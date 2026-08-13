@@ -1,0 +1,18 @@
+{
+  "project_root": ".",
+  "data_root": "./data",
+  "work_root": "./runtime/work",
+  "output_root": "./runtime/outputs",
+  "upload_root": "./data",
+  "tunnel_root": ".",
+  "publish_repo": "./runtime/publish",
+  "publish_subdirectory": "selected",
+  "host": "127.0.0.1",
+  "port": 8913,
+  "tunnel_port": 8906,
+  "max_concurrent_runs": 2,
+  "max_concurrent_anchor_runs": 2,
+  "image_poll_workers": 4,
+  "anchor_model": "gpt-image-2",
+  "publish_enabled": false
+}
