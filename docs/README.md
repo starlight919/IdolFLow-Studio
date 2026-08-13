@@ -53,6 +53,7 @@ docs/
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** — 常用命令一页速查
 
 ### API 参考 (`api/`)
+> 以下 API 参考文档为内部资料，仅随私有仓库（dev）提供，不包含在公开仓库中。
 - **[Seedance-2.0-API.md](api/Seedance-2.0-API.md)** — API 端点参考
 - **[Seedance-2.0-Complete-Guide.md](api/Seedance-2.0-Complete-Guide.md)** — 完整使用指南
 - **[seedance-2.5-api.md](api/seedance-2.5-api.md)** — 2.5 版本更新
