@@ -2,6 +2,26 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-14] - 健壮性与体验修复
+
+### 🐛 后端修复
+- 参考图映射 off-by-one：第 6 张参考图此前映射到索引 6 导致 `file` 不被替换、保存时抛错，改为正确的索引 5
+- `image_poll_workers=0` 会触发 `ThreadPoolExecutor(max_workers=0)` 崩溃，现保证最小为 1
+- 身高占位符「身高约{}cm」此前返回字面量、捕获数字被丢弃，现支持 `{}` 填充 group 1
+- GPT Image 客户端：`_create_task` 增加 `data` 层解包（与 poll/task 一致）；`_run_with_retry` 捕获 `requests.RequestException`；`poll_to_file` 对网络瞬断重试而非中断
+- 配置统一：GPT Image 2 直接复用 `SEEDANCE_API_BASE`/`SEEDANCE_API_KEY`，移除遗留的 `PHANROUTER_*` 中间变量
+- 隧道复用路径重建时改用带 fallback 的完整 state，修复 fallback 后 provider/base_url 错位
+
+### 🖥 前端与脚本
+- 所有模态框统一支持 ESC 关闭 + 遮罩点击关闭 + Tab 焦点陷阱（无障碍）
+- 暗色主题 FOUC 修复：`<head>` 内联主题 bootstrap，首屏不再闪白
+- 修正 `escapeAttr`/`escapeHtml` 转义（HTML 属性上下文）
+- `start-daemon.sh`/`status.sh` 端口提示动态化（`--port` 参数 / `VIDEO_WEB_PORT` / 默认 8913）
+- 移除死代码 `deleteTask()`（删除统一走 `confirmDeleteTask`）
+
+### 🗑 文档
+- 删除 `docs/WEB_REVIEW.md`（内部安全评审，不宜公开）
+
 ## [2026-08-14] - 素材隧道支持多方案与自动回退
 
 ### 🔧 隧道 provider 可配置

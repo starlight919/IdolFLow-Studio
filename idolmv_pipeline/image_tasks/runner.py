@@ -63,7 +63,7 @@ class AnchorTaskRunner:
         task = self.store.load(task_id)
         state = self._state(task.id, run_id)
         pending = [job for job in state.jobs() if job.get("status") != "done"]
-        workers = min(self.store.config.image_poll_workers, max(1, len(pending)))
+        workers = max(1, min(self.store.config.image_poll_workers, len(pending)))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(self._finish, task.id, run_id, state, job): job for job in pending}
             for future in as_completed(futures):

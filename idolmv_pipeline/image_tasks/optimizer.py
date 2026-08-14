@@ -393,13 +393,17 @@ def _extract_description(pattern: re.Pattern, text: str, mode: str) -> str:
     if not m:
         return ""
     if mode.startswith("desc:"):
-        # mode is "desc:1" (group index) or "desc:static_text" (literal description)
+        # mode is "desc:1" (group index), "desc:static_text" (literal), or
+        # "desc:模板{}" (literal with {} placeholder filled by group 1)
         rest = mode[5:]  # everything after "desc:"
         try:
             group_idx = int(rest)
             return m.group(group_idx) or ""
         except (ValueError, IndexError):
-            # Not a number — treat as literal description text
+            # 含 {} 占位符 → 用 group 1 填充（如 "身高约{}cm" + "175" → "身高约175cm"）
+            if "{}" in rest and m.lastindex and m.lastindex >= 1:
+                return rest.replace("{}", m.group(1) or "")
+            # 否则当作字面量描述文本
             return rest
     return ""
 
@@ -1194,7 +1198,7 @@ def _map_reference_names(
     refs: list[dict], names: list[str],
 ) -> list[dict]:
     """Replace placeholder image keys with actual filenames."""
-    img_label_to_idx = {"图1": 0, "图2": 1, "图3": 2, "图4": 3, "图5": 4, "图6": 6}
+    img_label_to_idx = {"图1": 0, "图2": 1, "图3": 2, "图4": 3, "图5": 4, "图6": 5}
     for ref in refs:
         idx = img_label_to_idx.get(ref.get("file", ""), -1)
         if 0 <= idx < len(names):

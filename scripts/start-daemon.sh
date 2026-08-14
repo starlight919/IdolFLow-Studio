@@ -61,8 +61,19 @@ unset _bindir
 echo "🚀 启动 IdolFlow Studio (后台模式)..."
 echo ""
 
+# 解析端口（优先级：--port 参数 > .env 的 VIDEO_WEB_PORT > 默认 8913）
+# 先保存原始参数，解析端口用副本，启动时仍用完整参数
+ORIG_ARGS=("$@")
+WEB_PORT="${VIDEO_WEB_PORT:-8913}"
+for ((i = 0; i < ${#ORIG_ARGS[@]}; i++)); do
+  case "${ORIG_ARGS[$i]}" in
+    --port) [[ -n "${ORIG_ARGS[$i+1]:-}" ]] && WEB_PORT="${ORIG_ARGS[$i+1]}" ;;
+    --port=*) WEB_PORT="${ORIG_ARGS[$i]#--port=}" ;;
+  esac
+done
+
 # 后台运行
-nohup python3 "$ROOT/run.py" video web --config "$ROOT/video-workspace.json" "$@" \
+nohup python3 "$ROOT/run.py" video web --config "$ROOT/video-workspace.json" "${ORIG_ARGS[@]}" \
   > "$LOG_FILE" 2>&1 &
 
 # 保存 PID
@@ -75,7 +86,7 @@ sleep 2
 if pgrep -f "run.py video web" > /dev/null; then
   echo "✅ 服务已启动（后台运行）"
   echo ""
-  echo "📍 访问地址: http://127.0.0.1:8913/"
+  echo "📍 访问地址: http://127.0.0.1:${WEB_PORT}/"
   echo "📝 日志文件: $LOG_FILE"
   echo ""
   echo "常用命令:"

@@ -11,9 +11,30 @@ echo "  IdolFlow Studio - 服务状态"
 echo "================================================"
 echo ""
 
+# 解析端口（优先级：进程命令行的 --port > .env 的 VIDEO_WEB_PORT > 默认 8913）
+_resolve_port() {
+  local port="${VIDEO_WEB_PORT:-8913}"
+  # 从 .env 读 VIDEO_WEB_PORT（若未 export）
+  if [[ -f "$ROOT/.env" ]]; then
+    local env_port
+    env_port="$(grep -E '^VIDEO_WEB_PORT=' "$ROOT/.env" | head -1 | cut -d= -f2 | tr -d ' \r')"
+    [[ -n "$env_port" ]] && port="$env_port"
+  fi
+  # 从进程命令行提取 --port（最高优先级）
+  local cmdline
+  cmdline="$(ps -p "${1:-}" -o command= 2>/dev/null || true)"
+  if [[ "$cmdline" =~ --port[[:space:]]+([0-9]+) ]]; then
+    port="${BASH_REMATCH[1]}"
+  elif [[ "$cmdline" =~ --port=([0-9]+) ]]; then
+    port="${BASH_REMATCH[1]}"
+  fi
+  echo "$port"
+}
+
 # 检查服务是否运行
 if pgrep -f "run.py video web" > /dev/null; then
   PID=$(pgrep -f "run.py video web")
+  WEB_PORT="$(_resolve_port "$PID")"
   
   echo "✅ 状态: 运行中"
   echo "🆔 进程 ID: $PID"
@@ -35,7 +56,7 @@ if pgrep -f "run.py video web" > /dev/null; then
     echo ""
   fi
   
-  echo "📍 访问地址: http://127.0.0.1:8913/"
+  echo "📍 访问地址: http://127.0.0.1:${WEB_PORT}/"
   echo ""
   echo "常用命令:"
   echo "  bash scripts/stop.sh              # 停止服务"

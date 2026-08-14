@@ -169,7 +169,7 @@ def _reachable(url: str, timeout: int = 15) -> bool:
         return False
 
 
-def _launch(provider: str, http: subprocess.Popen, log_path: Path) -> dict:
+def _launch(provider: str, http_pid: int, log_path: Path) -> dict:
     """按 provider 启动隧道，返回状态 dict。失败抛异常（供上层重试/回退）。"""
     if provider == "ngrok":
         tunnel, base_url = _start_ngrok(log_path)
@@ -177,7 +177,55 @@ def _launch(provider: str, http: subprocess.Popen, log_path: Path) -> dict:
         tunnel, base_url = _start_pinggy(log_path)
     else:
         raise RuntimeError(f"unknown provider: {provider}")
-    return {"provider": provider, "base_url": base_url, "http_pid": http.pid, "tunnel_pid": tunnel.pid, "port": HTTP_PORT, "root": str(PROJECT_ROOT), "created_at": time.time(), "running": True}
+    return {"provider": provider, "base_url": base_url, "http_pid": http_pid, "tunnel_pid": tunnel.pid, "port": HTTP_PORT, "root": str(PROJECT_ROOT), "created_at": time.time(), "running": True}
+
+
+def _launch_with_fallback(http_pid: int, log_path: Path, candidates: list[str]) -> dict:
+    """按候选 provider 顺序启动隧道：逐个重试，失败则尝试下一个。
+
+    - pinggy 重试 3 次，ngrok 重试 1 次（避免 ngrok 反复失败拖慢）
+    - 全部失败时汇总各 provider 的失败原因并抛出带安装指引的异常
+    """
+    failures: list[tuple[str, str]] = []
+    for cand in candidates:
+        attempts = 3 if cand == "pinggy" else 1
+        last_err = None
+        for attempt in range(attempts):
+            try:
+                state = _launch(cand, http_pid, log_path)
+                TUNNEL_STATE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                return state
+            except Exception as exc:
+                last_err = exc
+                if attempt < attempts - 1:
+                    time.sleep(5)
+        failures.append((cand, str(last_err or "unknown error")))
+
+    detail = "\n".join(f"  - {name}: {msg}" for name, msg in failures)
+    hint = (
+        "\n提示: 如需 ngrok 回退，请先安装并配置（多平台）:\n"
+        "  curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok-agent.sh | bash\n"
+        "  ngrok config add-authtoken <YOUR_TOKEN>"
+    )
+    raise RuntimeError(f"素材隧道启动失败，所有可用方案均未成功:\n{detail}{hint}")
+
+
+def _candidates(provider: str, existing: str | None = None) -> list[str]:
+    """决定候选 provider 顺序。
+
+    - 显式 pinggy / ngrok：只用一个
+    - auto（全新启动）：先 pinggy，失败回退 ngrok
+    - auto（复用重建）：优先沿用 existing provider，失败再回退另一个
+    """
+    if provider == "pinggy":
+        return ["pinggy"]
+    if provider == "ngrok":
+        return ["ngrok"]
+    # auto
+    if existing and existing in ("pinggy", "ngrok"):
+        other = "ngrok" if existing == "pinggy" else "pinggy"
+        return [existing, other]
+    return ["pinggy", "ngrok"]
 
 
 def start(provider: str = "auto") -> dict:
@@ -191,17 +239,23 @@ def start(provider: str = "auto") -> dict:
                 TUNNEL_STATE.unlink(missing_ok=True)
                 current = {"running": False}
             else:
-                # 复用：URL 可达，只重启死掉的进程（沿用已记录的 provider）
+                # 复用：URL 可达，只重启死掉的进程
                 http_pid = current.get("http_pid")
                 tunnel_pid = current.get("tunnel_pid")
-                existing = current.get("provider", "pinggy")
+                existing = current.get("provider")
+                # HTTP 进程死了 → 重启
                 if not current.get("http_alive", False):
                     http = _start_http()
                     http_pid = http.pid
+                # 隧道进程死了 → 按 provider 重启（带 fallback，与全新启动一致）
                 if not current.get("tunnel_alive", False):
                     log_path = Path("/tmp/seedance_tunnel.log")
-                    tunnel, _ = _start_ngrok(log_path) if existing == "ngrok" else _start_pinggy(log_path)
-                    tunnel_pid = tunnel.pid
+                    # 用 _launch_with_fallback 返回的完整 state（含新 provider/base_url），
+                    # 而非 {**current} 保留旧字段——否则 fallback 到另一 provider 时 URL 会错位
+                    new_state = _launch_with_fallback(http_pid, log_path, _candidates(provider, existing))
+                    state = {**current, "http_pid": http_pid, "provider": new_state["provider"], "base_url": new_state["base_url"], "tunnel_pid": new_state["tunnel_pid"], "created_at": new_state["created_at"], "running": True}
+                    TUNNEL_STATE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                    return state
                 state = {**current, "http_pid": http_pid, "tunnel_pid": tunnel_pid, "running": True}
                 TUNNEL_STATE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
                 return state
@@ -209,40 +263,8 @@ def start(provider: str = "auto") -> dict:
         # 全新启动（或重建）
         http = _start_http()
         log_path = Path("/tmp/seedance_tunnel.log")
-        failures: list[tuple[str, str]] = []
-
-        # 决定候选 provider 列表
-        if provider == "pinggy":
-            candidates = ["pinggy"]
-        elif provider == "ngrok":
-            candidates = ["ngrok"]
-        else:  # auto：先 pinggy，失败回退 ngrok
-            candidates = ["pinggy", "ngrok"]
-
-        for cand in candidates:
-            # pinggy 重试 3 次，ngrok 重试 1 次（避免 ngrok 反复失败拖慢）
-            attempts = 3 if cand == "pinggy" else 1
-            last_err = None
-            for attempt in range(attempts):
-                try:
-                    state = _launch(cand, http, log_path)
-                    TUNNEL_STATE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-                    return state
-                except Exception as exc:
-                    last_err = exc
-                    if attempt < attempts - 1:
-                        time.sleep(5)
-            failures.append((cand, str(last_err or "unknown error")))
-
-        http.terminate()
-
-        # 汇总所有 provider 的失败原因，给出可操作指引
-        detail = "\n".join(f"  - {name}: {msg}" for name, msg in failures)
-        hint = ""
-        if any(name == "ngrok" for name, _ in failures) or any(name == "pinggy" for name, _ in failures):
-            hint = (
-                "\n提示: 如需 ngrok 回退，请先安装并配置（多平台）:\n"
-                "  curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok-agent.sh | bash\n"
-                "  ngrok config add-authtoken <YOUR_TOKEN>"
-            )
-        raise RuntimeError(f"素材隧道启动失败，所有可用方案均未成功:\n{detail}{hint}")
+        try:
+            return _launch_with_fallback(http.pid, log_path, _candidates(provider))
+        except Exception:
+            http.terminate()
+            raise

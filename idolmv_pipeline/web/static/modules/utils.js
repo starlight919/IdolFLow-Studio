@@ -36,14 +36,24 @@ export function delay(ms) {
 export function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = value ?? '';
-  return div.innerHTML;
+  // 同时转义引号，使其既可用于元素文本，也可安全用于属性值上下文
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**
  * Escape string for use in HTML attribute values
  */
 export function escapeAttr(value) {
-  return String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+  // 用于两种上下文：① 双引号 HTML 属性（data-* / title）→ 需转义 " 与 &
+  // ② 双引号 HTML 属性内、单引号 JS 字符串（onclick="fn('...')"）→ " 解码后落入单引号串是安全的，
+  //    但 ' 与 \ 必须转义。先转 & 再转其他，避免嵌套二次解码。
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, "\\'")
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, ' ')
+    .replace(/\r/g, ' ');
 }
 
 /**

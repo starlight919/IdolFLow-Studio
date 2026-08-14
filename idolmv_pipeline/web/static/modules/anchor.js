@@ -30,7 +30,7 @@ function renderReferenceBinding(reference, index, key) {
   const binding = (reference.bindings || []).find((item) => item.aspect === key);
   const label = store.anchorPresets[key]?.label || key;
   if (!binding) {
-    return `<section class="reference-binding"><label class="binding-toggle"><input type="checkbox" onchange="renderReferenceBinding"><strong>${escapeHtml(label)}</strong></label></section>`;
+    return `<section class="reference-binding"><label class="binding-toggle"><input type="checkbox"><strong>${escapeHtml(label)}</strong></label></section>`;
   }
   return `<section class="reference-binding active">
     <label class="binding-toggle"><input type="checkbox" checked><strong>${escapeHtml(label)}</strong></label>

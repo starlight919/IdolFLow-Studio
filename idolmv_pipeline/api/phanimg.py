@@ -57,7 +57,9 @@ class PhanImgClient:
         url = f"{self._root}/v3/images/generations"
         resp = self._session.post(url, json=payload, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
+        result = resp.json()
+        # 统一 data 层解包（与 _poll_task / task() 保持一致）
+        data = result.get("data") if isinstance(result.get("data"), dict) else result
         task_id = data.get("task_id") or data.get("taskId")
         if not task_id:
             raise RuntimeError(f"Task creation failed: {data}")
@@ -92,7 +94,7 @@ class PhanImgClient:
             try:
                 task_id = self._create_task(payload)
                 return self._poll_task(task_id)
-            except RuntimeError as e:
+            except (RuntimeError, requests.RequestException) as e:
                 if attempt < max_retries - 1:
                     wait = 10 * (attempt + 1)
                     logger.warning("Attempt %d/%d failed: %s — retrying in %ds", attempt + 1, max_retries, e, wait)
@@ -138,7 +140,13 @@ class PhanImgClient:
     def poll_to_file(self, task_id: str, destination: Path) -> Path:
         deadline = time.monotonic() + self._poll_timeout
         while time.monotonic() < deadline:
-            data = self.task(task_id)
+            try:
+                data = self.task(task_id)
+            except requests.RequestException as e:
+                # 网络瞬断：task() 是幂等 GET，稍后重试，不中断整个轮询
+                logger.warning("Poll transient error for %s: %s — retrying", task_id, e)
+                time.sleep(self._poll_interval)
+                continue
             status = str(data.get("status", "")).lower()
             if status == "succeeded":
                 url = data.get("url", "")

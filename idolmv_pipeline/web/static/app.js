@@ -24,7 +24,7 @@ import {
   taskFolderRelative, checkTaskFolderEmpty, updateUploadState, scrollToUpload, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
-  markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
+  markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets,
   closeAssets, previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
@@ -106,9 +106,7 @@ export { showDeleteConfirm };
 try {
   $('#delete-cancel').addEventListener('click', closeDeleteModal);
   $('#delete-confirm').addEventListener('click', confirmDeleteAction);
-  $('#delete-modal').addEventListener('click', (e) => {
-    if (e.target === $('#delete-modal')) closeDeleteModal();
-  });
+  // 遮罩点击关闭已统一由 setupModalAccessibility 处理
 } catch {}
 
 function shouldRemoveFiles() {
@@ -370,7 +368,7 @@ Object.assign(window, {
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
-  saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets, closeAssets,
+  saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
@@ -394,9 +392,75 @@ Object.assign(window, {
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
+// ── Modal accessibility: 统一 ESC 关闭 + 遮罩点击关闭 + 焦点陷阱 ────────────
+
+// 各模态框 id → 关闭函数（ESC 关闭 + 遮罩点击关闭统一走这里）
+const MODAL_CLOSE_FNS = {
+  'asset-picker-modal': closeAssetPicker,
+  'folder-modal': closeFolderPicker,
+  'modal': closeModal,
+  'delete-modal': closeDeleteModal,
+  'help-modal': closeHelp,
+  'lyrics-timestamps-modal': closeLyricsTimestampsEditor,
+};
+
+function visibleModal() {
+  for (const id of Object.keys(MODAL_CLOSE_FNS)) {
+    const el = document.getElementById(id);
+    if (el && !el.hidden) return el;
+  }
+  return null;
+}
+
+function closeTopModal() {
+  const el = visibleModal();
+  if (!el) return;
+  MODAL_CLOSE_FNS[el.id]?.();
+}
+
+// 焦点陷阱：Tab 循环锁定在可见 modal 内
+function trapFocus(e) {
+  const modal = visibleModal();
+  if (!modal) return;
+  const focusables = modal.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  );
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function onGlobalKeydown(e) {
+  if (e.key === 'Escape') {
+    // 关闭当前可见的顶层 modal（符合 ESC 关闭 dialog 的通用惯例）
+    closeTopModal();
+  } else if (e.key === 'Tab') {
+    trapFocus(e);
+  }
+}
+
+function setupModalAccessibility() {
+  document.addEventListener('keydown', onGlobalKeydown);
+  // 遮罩点击关闭：点击 modal 本身（非内部卡片）时关闭
+  document.addEventListener('click', (e) => {
+    const modal = e.target.closest?.('.modal');
+    if (modal && e.target === modal && MODAL_CLOSE_FNS[modal.id]) {
+      MODAL_CLOSE_FNS[modal.id]();
+    }
+  });
+}
+
 async function init() {
   initTheme();
   setupDelegatedHandlers();
+  setupModalAccessibility();
   updateMode();
   store.workspaceSettings = await loadSettings();
   // 绑定表单提交（type=submit 按钮需要 form submit 事件才能调用保存逻辑）
@@ -411,9 +475,7 @@ async function init() {
   updateUploadState();
   checkTaskFolderEmpty();
   $('#close-lyrics-timestamps')?.addEventListener('click', closeLyricsTimestampsEditor);
-  $('#lyrics-timestamps-modal')?.addEventListener('click', (e) => {
-    if (e.target === $('#lyrics-timestamps-modal')) closeLyricsTimestampsEditor();
-  });
+  // 遮罩点击关闭已统一由 setupModalAccessibility 处理
   $('#add-timestamp-btn')?.addEventListener('click', addTimestamp);
   $('#reset-timestamps-btn')?.addEventListener('click', resetTimestamps);
   $('#save-lyrics-timestamps-btn')?.addEventListener('click', saveLyricsTimestampsFromModal);

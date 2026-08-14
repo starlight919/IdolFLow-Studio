@@ -65,7 +65,6 @@ export async function checkTaskFolderEmpty() {
     const { hasImage, hasAV } = await _scanFolderHasAssets(rel);
     const missingImage = !hasImage;
     const missingAV = !hasAV;
-    console.log('[checkTaskFolderEmpty]', { rel, hasImage, hasAV, missingImage, missingAV });
     // 两类素材都齐 → 隐藏提示
     if (!missingImage && !missingAV) { tip.hidden = true; return; }
 
@@ -738,19 +737,6 @@ export async function loadTasks() {
   list.innerHTML = html || renderEmptyState('📋', '还没有保存任务', '填写表单后点击"保存任务"即可添加');
 }
 
-export async function deleteTask(id) {
-  // 确认弹窗已由 confirmDeleteTask (app.js) 统一处理，此函数仅执行删除
-  try {
-    const resp = await fetch(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({ error: resp.statusText }));
-      throw new Error(body.error || '删除失败');
-    }
-    toast('任务已删除');
-    await loadTasks();
-  } catch (e) { toast(`删除失败: ${e.message}`); }
-}
-
 export function editTask(id) {
   const t = store.tasks.find((x) => x.id === id);
   if (!t) return;
@@ -999,6 +985,10 @@ export async function uploadAsset() {
 
 export async function loadRuns() {
   store.runs = await api('/api/runs');
+  // 轮询场景（每 1.5s）下，数据未变化则跳过重渲染，避免整列表/审核下拉框反复重建导致的闪烁与选中态抖动
+  const sig = JSON.stringify(store.runs.map((r) => [r.run_id, r.status, r.stage, r.completed, r.total, r.message]));
+  if (sig === store._runsSig) return;
+  store._runsSig = sig;
   const list = $('#run-list');
   if (!list) return;
   list.innerHTML = store.runs.map(runCard).join('') || renderEmptyState('🚀', '还没有运行记录', '配置并启动一个任务后即可看到进度');
@@ -1389,8 +1379,6 @@ export function onLyricsTimestampsKey(e) {
   } else if (e.code === 'ArrowDown') {
     e.preventDefault();
     setActiveLine(_lyricsTsState.activeIndex + 1);
-  } else if (e.code === 'Escape') {
-    e.preventDefault();
-    closeLyricsTimestampsEditor();
   }
+  // Escape 关闭已统一由 app.js 的全局 modal 处理
 }
