@@ -23,7 +23,7 @@ import {
 import {
   taskFolderRelative, checkTaskFolderEmpty, updateUploadState, scrollToUpload, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
-  browseFolder, chooseFolder, createFolder, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
+  browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
   closeAssets, previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
@@ -69,17 +69,18 @@ export function closeDeleteModal() {
   if (deleteResolver) { deleteResolver(false); deleteResolver = null; }
 }
 
-function showDeleteConfirm({ title, desc, showFileOption = true, confirmText = '确认删除', danger = true }) {
+function showDeleteConfirm({ title, desc, htmlDesc, showFileOption = true, confirmText = '确认删除', danger = true }) {
   return new Promise((resolve) => {
     const confirmBtn = $('#delete-confirm');
     if (!confirmBtn) {
       // HTML 被浏览器缓存，降级为原生 confirm
-      resolve(confirm(`${title}\n\n${desc.replace(/<br>/g, '\n')}`));
+      resolve(confirm(`${title}\n\n${(desc || '').replace(/<br>/g, '\n')}`));
       return;
     }
     deleteResolver = resolve;
     $('#delete-modal-title').textContent = title;
-    $('#delete-modal-desc').innerHTML = escapeHtml(desc).replace(/\n/g, '<br>');
+    // htmlDesc 用于需要富文本（级联树等）的场景，由调用方保证已转义安全
+    $('#delete-modal-desc').innerHTML = htmlDesc || escapeHtml(desc).replace(/\n/g, '<br>');
     confirmBtn.textContent = confirmText;
     confirmBtn.classList.toggle('danger', danger);
     const fileLabel = $('#delete-files-label');
@@ -366,7 +367,7 @@ Object.assign(window, {
   openHelp, closeHelp,
   // Task
   openAssetPicker, closeAssetPicker, browseAssets, toggleAsset, confirmAssetSelection,
-  openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder,
+  openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
   saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets, closeAssets,

@@ -167,18 +167,20 @@ runtime/work/<数据目录>/
 ### 任务配置和素材
 ```
 data/<数据目录>/
-├── anchors/                 # Anchor 模块统一管理
+├── anchors/                 # Anchor 图片（图片唯一落点）
 │   ├── anchor-task.json     # Anchor 任务配置
 │   ├── anchor-references/   # Anchor 参考图片
 │   ├── generated/<run_id>/  # 生成的候选图
 │   └── selected/            # promote 后的精选图（Video 任务从这里选 anchor 图）
+├── references/              # 参考音视频（视频 + 音频统一落点）
 ├── tasks/                   # Video 任务配置（支持同一目录多个任务）
 │   ├── 唱歌版.json
 │   └── 跳舞版.json
-├── *.mov, *.jpg             # 原始参考视频和图片
 └── seedance/
     └── assets.json          # 已上传资源 ID（同目录共享）
 ```
+
+> 素材目录约定：图片存放于 `anchors/`，音视频存放于 `references/`，任务目录根目录仅用于内部目录。
 
 Anchor 任务 ID = 数据目录名（如 `马路风`）；Video 任务 ID 格式为 `数据目录__任务名称`（如 `马路风__唱歌版`）。
 
@@ -230,6 +232,12 @@ du -sh runtime/outputs/<数据目录>/*/
 ```
 
 ### 清理旧运行
+
+> 推荐优先使用 Web 界面操作，避免手动删除误伤：
+> - 删除单条运行：运行列表中的「删除」按钮（可选级联删除生成文件）
+> - 删除整个任务：任务卡片的「删除」按钮（可选级联删除生成文件）
+> - 删除整个数据目录：文件夹选择器顶层目录旁的「🗑」按钮（级联清理任务、运行、素材与缓存）
+
 ```bash
 # ⚠️ 小心：删除前请确认已备份需要的视频
 

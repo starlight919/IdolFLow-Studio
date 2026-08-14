@@ -127,6 +127,7 @@ bash scripts/stop.sh
 ```text
 data/<数据目录>/                  # 素材、任务配置、Anchor 模块
   ├── anchors/                    # Anchor 参考图、生成候选、精选图
+  ├── references/                 # 参考音视频（视频 + 音频）
   └── tasks/                      # Video 任务配置（可有多个）
 runtime/outputs/<数据目录>/        # 生成的视频
 runtime/work/<数据目录>/           # 临时文件
@@ -153,6 +154,7 @@ runtime/work/<数据目录>/           # 临时文件
 ```
 data/马路风/                  ← 数据目录
   ├── anchors/                ← Anchor 形象图（GPT Image 2 生成）
+  ├── references/             ← 参考音视频（视频 + 音频）
   └── tasks/                  ← 视频任务配置
       ├── 唱歌版.json
       └── 跳舞版.json

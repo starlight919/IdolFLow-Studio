@@ -52,7 +52,8 @@ curl http://127.0.0.1:8913/api/runs/<运行ID>/intermediate | jq
 
 | 目录 | 用途 |
 |------|------|
-| `data/<目录>/anchors/` | Anchor 任务配置、参考图、生成候选、精选图 |
+| `data/<目录>/anchors/` | Anchor 图片：任务配置、参考图、生成候选、精选图 |
+| `data/<目录>/references/` | 参考音视频（视频 + 音频统一落点） |
 | `data/<目录>/tasks/` | Video 任务配置（同一目录可多个，如 `唱歌版.json`） |
 | `runtime/outputs/<数据目录>/` | **生成的视频** ✅（按数据目录而非任务名组织） |
 | `runtime/work/<数据目录>/` | 临时中间文件 |

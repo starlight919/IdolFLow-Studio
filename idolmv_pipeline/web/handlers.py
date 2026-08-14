@@ -307,8 +307,119 @@ def handle_folder_create(handler, path: str):
     if new_dir.exists():
         return json_response(handler, 409, {"error": "folder already exists"})
     new_dir.mkdir(parents=True)
+    # 自动创建约定子目录，引导素材落到固定位置（图片 → anchors/，音视频 → references/）
+    (new_dir / "anchors").mkdir(exist_ok=True)
+    (new_dir / "references").mkdir(exist_ok=True)
     root = getattr(handler.app.config, root_name)
     json_response(handler, 201, {"name": name, "path": new_dir.relative_to(root).as_posix()})
+
+
+def _data_dir_usage(handler, data_dir: str) -> dict:
+    """统计某个数据目录下关联的任务、运行、Anchor 任务，供删除前强确认展示。
+
+    返回层级信息，便于前端渲染清晰的级联树（目录 → 任务 → 运行产物）。
+    """
+    tasks = [t for t in handler.app.store.list() if t.get("data_dir") == data_dir]
+    anchor_task = next((t for t in handler.app.anchor_store.list() if t.get("data_dir") == data_dir), None)
+    video_runs = [r for r in handler.app.jobs.list() if (r.get("task_id") or "").split("__")[0] == data_dir]
+    anchor_runs = [r for r in handler.app.anchor_jobs.list() if (r.get("task_id") or "") == data_dir]
+
+    # 每个视频任务的运行数（按 task_id 关联）
+    tasks_detail = []
+    for t in tasks:
+        run_count = sum(1 for r in video_runs if r.get("task_id") == t["id"])
+        tasks_detail.append({
+            "id": t["id"],
+            "name": t.get("name"),
+            "run_count": run_count,
+        })
+
+    # 参考音视频素材（references/ 下的文件数）
+    refs_dir = handler.app.config.resolve_inside("data_root", f"{data_dir}/references")
+    ref_count = len([p for p in refs_dir.iterdir() if p.is_file()]) if refs_dir.is_dir() else 0
+
+    # Seedance 缓存是否存在
+    seedance_dir = handler.app.config.resolve_inside("data_root", f"{data_dir}/seedance")
+    has_seedance = seedance_dir.is_dir()
+
+    return {
+        "data_dir": data_dir,
+        "tasks": tasks_detail,
+        "anchor_task": {
+            "id": anchor_task["id"],
+            "name": anchor_task.get("name"),
+            "run_count": len(anchor_runs),
+        } if anchor_task else None,
+        "video_runs": len(video_runs),
+        "anchor_runs": len(anchor_runs),
+        "ref_count": ref_count,
+        "has_seedance": has_seedance,
+    }
+
+
+@_register("GET", "/api/data-dirs/")
+def handle_data_dir_get(handler, path: str):
+    parts = path.strip("/").split("/")
+    if len(parts) < 3:
+        return json_response(handler, 400, {"error": "data dir is required"})
+    data_dir = unquote(parts[2])
+    target = handler.app.config.resolve_inside("data_root", data_dir)
+    if not target.is_dir():
+        return json_response(handler, 404, {"error": f"data dir not found: {data_dir}"})
+    json_response(handler, 200, _data_dir_usage(handler, data_dir))
+
+
+@_register("DELETE", "/api/data-dirs/")
+def handle_data_dir_delete(handler, path: str):
+    parts = path.strip("/").split("/")
+    if len(parts) < 3:
+        return json_response(handler, 400, {"error": "data dir is required"})
+    data_dir = unquote(parts[2])
+    target = handler.app.config.resolve_inside("data_root", data_dir)
+    if not target.is_dir():
+        return json_response(handler, 404, {"error": f"data dir not found: {data_dir}"})
+    if target == handler.app.config.data_root.resolve():
+        return json_response(handler, 400, {"error": "cannot delete data root"})
+
+    # 1. 删除该目录下所有视频任务的 run 记录 + 生成产物（runtime/outputs、work）
+    for task in list(handler.app.store.list()):
+        if task.get("data_dir") != data_dir:
+            continue
+        task_id = task["id"]
+        for run in list(handler.app.jobs.list()):
+            if run.get("task_id") == task_id:
+                try:
+                    handler.app.jobs.delete(run["run_id"], remove_files=True)
+                except KeyError:
+                    pass
+
+    # 2. 删除该目录下所有 Anchor run 记录 + 生成候选（anchors/generated/<run_id>）
+    for run in list(handler.app.anchor_jobs.list()):
+        if (run.get("task_id") or "") == data_dir:
+            try:
+                handler.app.anchor_jobs.delete(run["run_id"], remove_files=True)
+            except KeyError:
+                pass
+
+    # 3. 删除视频任务定义（tasks/*.json）
+    for task in list(handler.app.store.list()):
+        if task.get("data_dir") == data_dir:
+            try:
+                handler.app.store.delete(task["id"])
+            except KeyError:
+                pass
+
+    # 4. 删除 Anchor 任务（anchors/ 子目录）
+    if next((t for t in handler.app.anchor_store.list() if t.get("data_dir") == data_dir), None):
+        try:
+            handler.app.anchor_store.delete(data_dir)
+        except (KeyError, OSError):
+            pass
+
+    # 5. 最后删除整个数据目录（含 references/、seedance/、残留 anchors/ 等）
+    shutil.rmtree(target, ignore_errors=True)
+
+    json_response(handler, 200, {"ok": True, "data_dir": data_dir})
 
 
 def _get_intermediate_for_run(handler, run_id: str) -> None:

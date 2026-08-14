@@ -98,7 +98,7 @@ data/<数据目录>/
 ├── tasks/                    # Video 任务配置（支持同一目录多个任务）
 │   ├── 唱歌版.json
 │   └── 跳舞版.json
-├── references/
+├── references/               # 参考音视频（视频 + 音频统一落点）
 └── seedance/assets.json
 
 runtime/work/<数据目录>/

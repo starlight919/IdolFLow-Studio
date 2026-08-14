@@ -32,8 +32,8 @@ async function _scanFolderHasAssets(rel, depth = 0) {
   let hasAV = false;
   for (const item of items) {
     if (item.directory) {
-      if (/^anchors?$|anchor/i.test(item.name)) { hasImage = true; continue; }
-      // 仅下钻已知素材子目录，且限制深度
+      // 仅下钻已知素材子目录，且限制深度（不能见到 anchors/ 目录名就认定有图片，
+      // 否则新建文件夹时自动建的空 anchors/ 会被误判为「已有图片」）
       if (ASSET_SUBDIR_RE.test(item.name)) {
         const sub = await _scanFolderHasAssets(`${rel.replace(/\/$/, '')}/${item.name}`, depth + 1);
         hasImage = hasImage || sub.hasImage;
@@ -69,7 +69,11 @@ export async function checkTaskFolderEmpty() {
     // 两类素材都齐 → 隐藏提示
     if (!missingImage && !missingAV) { tip.hidden = true; return; }
 
-    $$('.empty-folder-path').forEach((el) => { el.textContent = `data_root / ${rel}`; });
+    // 分别提示约定子目录：图片 → anchors/，音视频 → references/
+    $$('.empty-folder-path').forEach((el) => {
+      const sub = el.dataset.sub || '';
+      el.textContent = `data_root/${rel}/${sub}`.replace(/\/$/, '');
+    });
 
     const imgLine = $('#empty-folder-img');
     const avLine = $('#empty-folder-av');
@@ -187,12 +191,12 @@ export function removeVideoAsset(type, file) {
 export async function openAssetPicker(category) {
   store.assetPickerCategory = category;
   store.assetPickerRoot = taskFolderRelative();
-  // 统一约定：anchors 默认进 anchors/（上传/手动放的 Anchor 图片都在这里），
-  // references 默认进 references/（上传的参考音视频所在目录）。
-  // 若子目录不存在，browseAssets 会自动回退到任务根目录。
-  store.assetPickerPath = category === 'anchors'
-    ? `${store.assetPickerRoot.replace(/\/$/, '')}/anchors`
-    : `${store.assetPickerRoot.replace(/\/$/, '')}/references`;
+  const root = store.assetPickerRoot.replace(/\/$/, '');
+  // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）：
+  // - Anchor 图片：集中在 anchors/，默认直接进 anchors/，少点一层；
+  // - 参考音视频：统一在 references/，默认直接进 references/，不混图片、不混内部目录。
+  // 若默认目录不存在，browseAssets 会自动逐级回退到任务根目录。
+  store.assetPickerPath = `${root}/${category === 'anchors' ? 'anchors' : 'references'}`;
   // 已选中项：references 在音频 tab 下读 #audio-refs
   const isAudioTab = category === 'references'
     && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
@@ -226,28 +230,47 @@ export async function browseAssets(path) {
       }
     }
     store.assetPickerPath = data.path === '.' ? '' : data.path;
-    $('#asset-picker-path').textContent = `data_root / ${store.assetPickerPath}`;
+    $('#asset-picker-path').textContent = `data_root/${store.assetPickerPath}`;
 
     const parent = store.assetPickerPath.split('/').slice(0, -1).join('/');
     const base = store.assetPickerRoot ? store.assetPickerRoot.replace(/\/$/, '') + '/' : '';
     const relative = (item) => (item.path.startsWith(base) ? item.path.slice(base.length) : item.path);
-    const allowed = (item) =>
-      store.assetPickerCategory === 'references'
-        ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i.test(item.name)
-        : /\.(png|jpe?g|webp)$/i.test(item.name);
+    const extRe = store.assetPickerCategory === 'references'
+      ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i
+      : /\.(png|jpe?g|webp)$/i;
+    const allowed = (item) => extRe.test(item.name);
 
-    // 参考音视频模式下，隐藏 anchor 图片相关目录（anchors/ anchor-references/ 等），
-    // 避免用户在选音视频时误入图片目录。
-    const allowedDir = (item) =>
-      store.assetPickerCategory === 'references'
-        ? !/^anchors?$|anchor/i.test(item.name)
-        : true;
+    // 目录过滤：隐藏内部目录（seedance/ tasks/），并根据类别过滤无关目录。
+    // 选音视频 → 隐藏 anchor 图片目录；选图片 → 隐藏音视频目录（references/ audio/ 等）。
+    const INTERNAL_DIR = /^(seedance|tasks|\.|\.\.)$/i;
+    const allowedDir = (item) => {
+      if (INTERNAL_DIR.test(item.name)) return false;
+      if (store.assetPickerCategory === 'references') {
+        return !/^anchors?$|anchor/i.test(item.name);
+      }
+      return !/^(references?|audio|videos?)$/i.test(item.name);
+    };
+
+    const root = store.assetPickerRoot ? store.assetPickerRoot.replace(/\/$/, '') : '';
+    // 当前目录下符合类别的文件数
+    const currentFiles = data.items.filter((item) => !item.directory && allowed(item));
+    // 若当前目录（默认子目录）没有可选文件，但任务主目录里有同类文件，引导用户去主目录找
+    let rootHint = '';
+    if (currentFiles.length === 0 && store.assetPickerPath && store.assetPickerPath !== root) {
+      const rootData = await api(`/api/files?root=data_root&path=${encodeURIComponent(root)}`);
+      const rootFiles = (rootData.items || []).filter((item) => !item.directory && allowed(item));
+      if (rootFiles.length > 0) {
+        const label = store.assetPickerCategory === 'anchors' ? '图片' : '音视频';
+        rootHint = `<button class="asset-root-hint" onclick="browseAssets('${escapeAttr(root)}')"><span>💡 当前目录没有可选${label}，主目录里有 ${rootFiles.length} 个</span><span>去主目录 ›</span></button>`;
+      }
+    }
 
     const list = $('#asset-picker-list');
     list.innerHTML =
       (store.assetPickerPath
         ? `<button onclick="browseAssets('${escapeAttr(parent)}')"><span>上一级</span><span>..</span></button>`
         : '') +
+      rootHint +
       data.items
         .map((item) =>
           item.directory
@@ -329,8 +352,10 @@ export async function browseFolder(path) {
   try {
     const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(path)}`);
     store.folderPath = data.path === '.' ? '' : data.path;
-    $('#folder-path').textContent = `data_root / ${store.folderPath}`;
+    $('#folder-path').textContent = `data_root/${store.folderPath}`;
     const parent = store.folderPath.split('/').slice(0, -1).join('/');
+    // 只在顶层（data_root 根）对一级数据目录提供「删除文件夹」入口
+    const isRoot = !store.folderPath;
     $('#folder-list').innerHTML =
       `<div class="folder-new">
         <input id="new-folder-name" type="text" placeholder="新建文件夹名称...">
@@ -339,7 +364,10 @@ export async function browseFolder(path) {
       (store.folderPath ? `<button onclick="browseFolder('${escapeAttr(parent)}')"><span>上一级</span><span>..</span></button>` : '') +
       data.items
         .filter((i) => i.directory)
-        .map((i) => `<button onclick="browseFolder('${escapeAttr(i.path)}')"><span>${escapeHtml(i.name)}</span><span>›</span></button>`)
+        .map((i) => `<div class="folder-row">
+          <button class="folder-row-main" onclick="browseFolder('${escapeAttr(i.path)}')"><span>${escapeHtml(i.name)}</span><span>›</span></button>
+          ${isRoot ? `<button class="folder-row-del" onclick="confirmDeleteDataDir('${escapeAttr(i.name)}')" title="删除此数据目录及其所有任务与生成产物">🗑</button>` : ''}
+        </div>`)
         .join('');
   } catch (e) {
     toast(e.message);
@@ -356,6 +384,70 @@ export async function createFolder() {
     toast(`文件夹"${name}"已创建`);
     await browseFolder(store.folderPath);
   } catch (e) { toast(e.message); }
+}
+
+export async function confirmDeleteDataDir(dataDir) {
+  // 先取关联信息，用于强确认弹窗明确列出级联删除的全部内容
+  let usage;
+  try {
+    usage = await api(`/api/data-dirs/${encodeURIComponent(dataDir)}`);
+  } catch (e) {
+    toast(`获取目录信息失败: ${e.message}`);
+    return;
+  }
+
+  const tasks = usage.tasks || [];
+  const anchor = usage.anchor_task;
+  const runTotal = (usage.video_runs || 0) + (usage.anchor_runs || 0);
+
+  // 构造级联树：目录 → 各类资源 → 关联运行/产物
+  const row = (children, label, detail) => `<div class="cascade-row"><span class="cascade-line">${children}</span><span class="cascade-label">${label}</span>${detail ? `<span class="cascade-detail">${detail}</span>` : ''}</div>`;
+
+  let body = '';
+  body += `<div class="cascade-root">📁 <strong>${escapeHtml(dataDir)}</strong></div>`;
+
+  // 视频任务（每个任务单独一行，标注关联运行数）
+  tasks.forEach((t, i) => {
+    const isLast = i === tasks.length - 1 && !anchor;
+    const detail = t.run_count > 0 ? `${t.run_count} 次运行 · 生成产物` : '无运行';
+    body += row(isLast ? '└─' : '├─', `视频任务「${escapeHtml(t.name)}」`, detail);
+  });
+
+  // Anchor 任务
+  if (anchor) {
+    const detail = anchor.run_count > 0 ? `${anchor.run_count} 次运行 · 候选图` : '无运行';
+    body += row('└─', `Anchor 任务「${escapeHtml(anchor.name)}」`, detail);
+  }
+
+  // 素材与缓存
+  const refDetail = (usage.ref_count || 0) > 0 ? `${usage.ref_count} 个文件` : '空';
+  body += row('├─', '参考音视频（references/）', refDetail);
+  body += row('├─', 'Anchor 图片与候选（anchors/）', anchor ? '随 Anchor 任务删除' : '（无 Anchor 任务）');
+  body += row(usage.has_seedance ? '└─' : '└─', 'Seedance 素材缓存', usage.has_seedance ? '存在' : '无');
+
+  const totalTasks = tasks.length + (anchor ? 1 : 0);
+  const summary = `<div class="cascade-summary">共 ${totalTasks} 个任务 · ${runTotal} 条运行记录 · 删除后不可恢复</div>`;
+
+  const htmlDesc = body + summary;
+
+  const ok = await window.showDeleteConfirm({
+    title: '删除整个数据目录',
+    htmlDesc,
+    showFileOption: false,
+    confirmText: '确认删除整个目录',
+    danger: true,
+  });
+  if (!ok) return;
+
+  try {
+    await fetch(`/api/data-dirs/${encodeURIComponent(dataDir)}`, { method: 'DELETE' });
+    toast(`已删除目录「${dataDir}」`);
+    await browseFolder(store.folderPath);
+    await loadTasks();
+    await loadRuns();
+  } catch (e) {
+    toast(`删除失败: ${e.message}`);
+  }
 }
 
 export async function chooseFolder() {
