@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -108,7 +109,13 @@ class VideoTaskRunner:
             segments = self._segments(reference)
             audio = self._reference_audio(reference)
             if not audio.exists():
-                extract_audio(self.adapter.task_dir / (reference.audio_file or reference.file), audio)
+                source = self.adapter.task_dir / (reference.audio_file or reference.file)
+                if reference.pass_reference_video:
+                    # 视频模式：从视频提取音频
+                    extract_audio(source, audio)
+                else:
+                    # 纯音频模式：reference.file 本身就是音频，直接拷贝（对等视频提取音频，不再二次转码）
+                    shutil.copyfile(source, audio)
             pad_mode = segments[0][4] if segments else "back"
             if segments and len(segments) == 1:
                 seedance_duration = segments[0][2]
@@ -300,6 +307,8 @@ class VideoTaskRunner:
                         "resolution": self.adapter.resolution,
                         "duration": duration,
                         "generate_audio": self.adapter.generate_audio,
+                        "watermark": self.adapter.watermark,
+                        "output_format": self.adapter.output_format,
                         "content": content,
                     }
                     job_specs.append((job_id, anchor, ref, prompt, candidate, payload))

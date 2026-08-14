@@ -21,7 +21,7 @@ data/<目录名>/
 
 | 字段 | 说明 |
 |------|------|
-| `id` | 任务唯一标识，通常与数据目录名一致 |
+| `id` | 任务唯一标识，通常与任务文件夹名一致 |
 | `name` | 任务显示名称 |
 | `description` | 正向提示（写实人物描述） |
 | `negative` | 负向提示（要避免的元素） |
@@ -32,4 +32,4 @@ data/<目录名>/
 | `aspects` | 人物特征维度（如五官、发型），`priority` 为 `locked` / `required` |
 | `references` | 参考图片绑定，`file` 指向 `anchors/anchor-references/` 下的图片，`bindings` 声明每个参考图约束哪些特征 |
 
-日常也可直接在 Web 工作台的 Anchor 面板新建任务，通过「本机上传」或「从数据目录选择」（选取 `anchors/anchor-references/` 里已有的图片）添加参考图。
+日常也可直接在 Web 工作台的 Anchor 面板新建任务，通过「本机上传」或「从任务文件夹选择」（选取 `anchors/anchor-references/` 里已有的图片）添加参考图。

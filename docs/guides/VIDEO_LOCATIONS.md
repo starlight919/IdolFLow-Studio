@@ -3,13 +3,13 @@
 ## 快速定位
 
 ### 默认路径
-所有生成的视频都在（按「数据目录」组织，非任务名）：
+所有生成的视频都在（按「任务文件夹」组织，非任务名）：
 ```
-./runtime/outputs/<数据目录>/<运行ID>/
+./runtime/outputs/<任务文件夹>/<运行ID>/
 ```
 
 ### 示例
-如果你的数据目录是 `ruins`，运行 ID 是 `run_20260810_225617_306897`，视频在：
+如果你的任务文件夹是 `ruins`，运行 ID 是 `run_20260810_225617_306897`，视频在：
 ```
 ./runtime/outputs/ruins/run_20260810_225617_306897/
 ```
@@ -18,7 +18,7 @@
 
 ### 完整结构
 ```
-runtime/outputs/<数据目录>/<运行ID>/
+runtime/outputs/<任务文件夹>/<运行ID>/
 ├── review_manifest.json          # 审核清单（包含所有候选视频信息）
 ├── run.json                       # 运行状态和元数据
 ├── anchor-1/                      # 第一个 Anchor 的结果
@@ -70,10 +70,10 @@ runtime/outputs/<数据目录>/<运行ID>/
 ls -la runtime/outputs/
 
 # 查看特定任务的所有运行
-ls -la runtime/outputs/<数据目录>/
+ls -la runtime/outputs/<任务文件夹>/
 
 # 查看特定运行的所有视频
-find runtime/outputs/<数据目录>/<运行ID>/ -name "final.mp4"
+find runtime/outputs/<任务文件夹>/<运行ID>/ -name "final.mp4"
 
 # 示例：查看 ruins 任务的所有最终视频
 find runtime/outputs/ruins/ -name "final.mp4"
@@ -158,7 +158,7 @@ find . -name "final.mp4" -exec cp {} ~/Desktop/ruins_videos/ \;
 
 ### 中间文件
 ```
-runtime/work/<数据目录>/
+runtime/work/<任务文件夹>/
 ```
 - 临时工作文件
 - 视频处理中间步骤
@@ -166,7 +166,7 @@ runtime/work/<数据目录>/
 
 ### 任务配置和素材
 ```
-data/<数据目录>/
+data/<任务文件夹>/
 ├── anchors/                 # Anchor 图片（图片唯一落点）
 │   ├── anchor-task.json     # Anchor 任务配置
 │   ├── anchor-references/   # Anchor 参考图片
@@ -182,7 +182,7 @@ data/<数据目录>/
 
 > 素材目录约定：图片存放于 `anchors/`，音视频存放于 `references/`，任务目录根目录仅用于内部目录。
 
-Anchor 任务 ID = 数据目录名（如 `马路风`）；Video 任务 ID 格式为 `数据目录__任务名称`（如 `马路风__唱歌版`）。
+Anchor 任务 ID = 任务文件夹名（如 `马路风`）；Video 任务 ID 格式为 `任务文件夹__任务名称`（如 `马路风__唱歌版`）。
 
 ### Web 运行记录
 ```
@@ -195,7 +195,7 @@ runtime/outputs/.web-runs/
 
 ### 方法 1: Web 界面下载
 - 在 Web 界面点击"下载"按钮
-- 自动命名为：`<数据目录>__<任务名>_<Anchor>_<参考>_<变体>_candidate-XX.mp4`（含数据目录与任务名，中文保留）
+- 自动命名为：`<任务文件夹>__<任务名>_<Anchor>_<参考>_<变体>_candidate-XX.mp4`（含任务文件夹与任务名，中文保留）
 
 ### 方法 2: 直接复制文件
 ```bash
@@ -228,7 +228,7 @@ du -sh runtime/outputs/
 du -sh runtime/outputs/*/
 
 # 查看每个运行的大小
-du -sh runtime/outputs/<数据目录>/*/
+du -sh runtime/outputs/<任务文件夹>/*/
 ```
 
 ### 清理旧运行
@@ -236,16 +236,16 @@ du -sh runtime/outputs/<数据目录>/*/
 > 推荐优先使用 Web 界面操作，避免手动删除误伤：
 > - 删除单条运行：运行列表中的「删除」按钮（可选级联删除生成文件）
 > - 删除整个任务：任务卡片的「删除」按钮（可选级联删除生成文件）
-> - 删除整个数据目录：文件夹选择器顶层目录旁的「🗑」按钮（级联清理任务、运行、素材与缓存）
+> - 删除整个任务文件夹：文件夹选择器顶层目录旁的「🗑」按钮（级联清理任务、运行、素材与缓存）
 
 ```bash
 # ⚠️ 小心：删除前请确认已备份需要的视频
 
 # 删除特定运行
-rm -rf runtime/outputs/<数据目录>/<运行ID>/
+rm -rf runtime/outputs/<任务文件夹>/<运行ID>/
 
 # 删除所有运行（保留最新 3 个）
-cd runtime/outputs/<数据目录>/
+cd runtime/outputs/<任务文件夹>/
 ls -t | tail -n +4 | xargs rm -rf
 ```
 
@@ -260,7 +260,7 @@ A:
 ### Q: 如何只下载想要的视频？
 A: 
 - 在 Web 审核页中，每个候选视频用浏览器原生播放器播放，右键或播放器控制栏即可保存到本地
-- 候选视频文件位于 `runtime/outputs/<数据目录>/<运行ID>/<anchor>/<候选>/final.mp4`，也可直接按需拷贝
+- 候选视频文件位于 `runtime/outputs/<任务文件夹>/<运行ID>/<anchor>/<候选>/final.mp4`，也可直接按需拷贝
 
 ### Q: 视频生成失败后会有文件吗？
 A: 
@@ -277,7 +277,7 @@ A:
 
 **最重要的位置**:
 ```
-runtime/outputs/<数据目录>/<运行ID>/anchor-X/candidate-XX/final.mp4
+runtime/outputs/<任务文件夹>/<运行ID>/anchor-X/candidate-XX/final.mp4
 ```
 
 **快速查找命令**:

@@ -15,6 +15,7 @@
 - 修复从数据目录选择的参考图保存时路径丢失 `anchor-references/` 前缀：picker 按 `anchors/anchor-references/` 截断后只剩纯文件名，现统一补回前缀，与上传、后端 `_reference_source` 解析一致（`file` 统一为相对 `anchors/` 的 `anchor-references/<name>`）
 - 参考图选择弹窗为每张图显示缩略图预览（此前仅视频任务的 Anchor 图片有缩略图，参考图缺失），预览路径改为用相对 `data_root` 的完整路径，避免与视频任务目录前缀混用
 - 修复切换数据目录后参考图缩略图残留：手动在输入框改目录（`oninput`）此前只更新提示条、不清空已选参考图，现引入 `store._anchorDir` 检测目录变化并清空旧参考图；编辑回填、保存、从视频任务跳转等设置目录处同步 `_anchorDir`，避免误清空刚加载的参考图
+- 修复「从数据目录选择」弹窗残留上一个文件夹图片：`browseAssets` 的主目录引导逻辑在请求不存在的 `anchor-references/` 目录时未捕获异常，导致列表渲染提前中断、旧文件残留；现给引导请求加 try-catch，目录缺失时跳过引导并正常渲染当前目录（空则显示空状态）
 
 ### 🐛 后端与进度
 - Anchor 运行进度对齐视频任务：提交（submitting）阶段不再把进度条拉满，仅生成（generating）/完成阶段推进整体进度
@@ -39,6 +40,35 @@
 - 防御任务 id 双重前缀：`list()` 读取 task.json 时若 `id` 已含 `data_dir__` 前缀则剥离后再拼接，避免历史脏数据产生 `曾曾__曾曾__跳舞` 这类重复前缀
 - Asset 清单增加说明：顶部提示「文件指纹自动复用，源文件未变则跳过上传」，每个条目标注素材类型（Anchor 图片/参考视频/参考音频）
 - Anchor 生成器选择数据目录后，检测并**分别提示**已有 Anchor 图：「已有 N 张正式 Anchor 图（anchors/ 根目录，可直接在视频任务里使用）」与「另有 M 张生成候选图（generated/，需「设为 Anchor」后固定到正式目录）」，不再把手动上传的正式图与生成候选图混称「已生成」
+
+### 🎬 高级视频设置（Seedance 2.5 参数可配置）
+- 视频任务表单新增「高级视频设置」折叠区（默认收起）：分辨率（480p/720p/1080p）、宽高比（9:16/16:9/1:1/4:3/3:4）、生成音频、加水印、输出格式（MP4/WebM）
+- 折叠区 summary 直接显示当前默认值（「默认：720p · 9:16 · 无音频 · 无水印 · MP4」），用户无需展开即可判断是否需要调整
+- 生成音频/加水印使用 toggle switch 开关样式（与 select 分区显示，上方有分隔线），支持键盘 `focus-visible` 聚焦 outline
+- 后端 `VideoTaskAdapter` 新增 `watermark`、`output_format` 字段；`factory.py` 读取任务的 `resolution`/`ratio`/`generate_audio`/`watermark`/`output_format`；`runner.py` 提交 Seedance 时把这些参数完整传入 payload
+- 前端 `formTask()` 收集高级设置字段；`editTask()` 回填；`resetForm()` 通过表单 reset 恢复默认值
+- 任务 JSON 可选 `resolution`/`ratio`/`generate_audio`/`watermark`/`output_format` 字段，不填用默认值（720p / 9:16 / false / false / mp4）
+
+### 🖼 图片放大预览（Lightbox）
+- 点击可放大的图片缩略图弹出大图预览（黑底遮罩），**再点图片或遮罩即关闭**（toggle 交互），也可 ESC / 右上角 × 关闭
+- 覆盖范围：视频任务主页面素材图（Anchor 图与参考图）、「从文件夹选择」picker 缩略图、Anchor 参考图卡片、Anchor 候选审核图
+- Anchor 参考图卡片：点击图片仅放大预览，不触发展开/收起（展开仍可通过卡片其他区域触发）
+- 所有可放大图片鼠标悬停显示 zoom-in 光标，放大后显示 zoom-out 光标
+
+### 🔧 命名统一与交互优化
+- 统一术语：Anchor 页「数据目录」→「任务文件夹」，与视频任务页一致；folder picker 标题「选择机器文件夹」→「选择任务文件夹」；参考图按钮「从数据目录选择」→「从文件夹选择」；删除/切换确认弹窗文案同步
+- 任务列表排序：视频任务和 Anchor 任务支持三态排序切换（**时间降序**最新在前 → **时间升序**最早在前 → **名字 A-Z**），按钮实时显示当前状态与方向；后端 `list()` 为任务暴露 `mtime`（文件修改时间）字段供前端排序
+- 排序按钮修复 dark 模式看不清：改用 `--surface` 背景 + `--text` 文字色，dark 下使用更亮文字和边框
+- Lightbox 交互优化：点击图片本身也能关闭（此前需找右上角 ×）；关闭时 `stopPropagation` 防止冒泡触发其他逻辑（修复放大后点击关闭误跳「现场生成」tab）
+- Anchor 参考图卡片：去掉缩略图上的展开/收起图标，缩略图点击仅放大预览（lightbox）；展开/收起配置改为点击标题文字触发，标题带 ▾/▴ 提示
+- 修复歌词时间戳弹窗保存后页面滚回顶部：打开弹窗时记录 `window.scrollY`，关闭时恢复，保证回到原停留位置
+- 修复切换音视频后打歌词仍用旧音频：`_resolveAudioSource` 此前优先用已保存任务的 `references`（编辑回填的旧值），现改为**优先读取表单当前的音视频引用**（`#references`/`#audio-refs`），表单为空时才回退到已保存任务
+- 修复纯音频输入（仅音频、`pass_reference_video=false`）的音频处理与视频提取音频不对等：此前纯音频也走 `extract_audio`（从视频提取音频）二次转码，现改为纯音频模式下直接 `shutil.copyfile` 拷贝原音频文件（视频模式仍走 `extract_audio`），两者对等且音频 asset 均正确上传
+
+### 🐛 Anchor 候选审核「生成中」状态
+- 修复 Anchor 生成中点击运行记录时审核区仍显示旧图：此前 `loadAnchorReview` 一次性加载 manifest，运行中 manifest 未写入会 404 且无 catch，导致旧候选残留
+- 现改为轮询加载（运行中每 3 秒刷新），manifest 不可用时显示「生成中，候选图完成后将实时出现在这里…」占位，完成后自动加载候选图
+- 运行下拉框纳入「生成中」的运行记录（标注「（生成中）」），切换时清空旧内容、显示对应状态
 
 ## [2026-08-14] - 健壮性与体验修复
 

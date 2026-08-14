@@ -77,6 +77,9 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
         model=task.get("model", "sd2.5"),
         ratio=task.get("ratio", "9:16"),
         resolution=task.get("resolution", "720p"),
+        generate_audio=task.get("generate_audio", False),
+        watermark=task.get("watermark", False),
+        output_format=task.get("output_format", "mp4"),
         metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {})},
     )
 

@@ -41,11 +41,12 @@ class TaskStore:
             return []
         result = []
         # New scheme: data/<dir>/tasks/<task_id>.json
-        for path in sorted(self.root.glob("*/tasks/*.json")):
+        for path in sorted(self.root.glob("*/tasks/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.parent.name
                 task["data_dir"] = data_dir
+                task["mtime"] = path.stat().st_mtime
                 # 防御脏数据：id 字段若已含 data_dir 前缀（历史手动写入 composite id），循环剥离后再拼接，避免双重前缀
                 raw_id = str(task.get("id") or task.get("name", ""))
                 prefix = f"{data_dir}__"
@@ -56,7 +57,7 @@ class TaskStore:
             except (OSError, json.JSONDecodeError):
                 continue
         # Legacy migration: data/<dir>/task.json
-        for path in sorted(self.root.glob("*/task.json")):
+        for path in sorted(self.root.glob("*/task.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.name
@@ -68,6 +69,7 @@ class TaskStore:
                 task["data_dir"] = data_dir
                 self._migrate_from_legacy(path, task)
                 task["id"] = composite_id(data_dir, task.get("id", task.get("name", "")))
+                task["mtime"] = path.stat().st_mtime
                 result.append(task)
             except (OSError, json.JSONDecodeError):
                 continue

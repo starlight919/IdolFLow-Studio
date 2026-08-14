@@ -10,7 +10,7 @@ bash scripts/start.sh
 ## 📹 生成的视频在哪里？
 
 ```bash
-runtime/outputs/<数据目录>/<运行ID>/anchor-X/candidate-XX/final.mp4
+runtime/outputs/<任务文件夹>/<运行ID>/anchor-X/candidate-XX/final.mp4
 ```
 
 **快速查找所有视频**:
@@ -55,11 +55,11 @@ curl http://127.0.0.1:8913/api/runs/<运行ID>/intermediate | jq
 | `data/<目录>/anchors/` | Anchor 图片：任务配置、参考图（`anchor-references/`）、生成候选（`generated/`）、正式图（`anchors/` 根目录，上传与「设为 Anchor」统一落点） |
 | `data/<目录>/references/` | 参考音视频（视频 + 音频统一落点） |
 | `data/<目录>/tasks/` | Video 任务配置（同一目录可多个，如 `唱歌版.json`） |
-| `runtime/outputs/<数据目录>/` | **生成的视频** ✅（按数据目录而非任务名组织） |
-| `runtime/work/<数据目录>/` | 临时中间文件 |
+| `runtime/outputs/<任务文件夹>/` | **生成的视频** ✅（按任务文件夹而非任务名组织） |
+| `runtime/work/<任务文件夹>/` | 临时中间文件 |
 | `.env` | 环境变量配置（不提交 Git） |
 
-> **任务 ID 格式**：Anchor 任务 ID = 数据目录名（如 `马路风`）；Video 任务 ID = `数据目录__任务名称`（如 `马路风__唱歌版`）。同一数据目录的 Anchor 正式图和 Video 任务共享素材。
+> **任务 ID 格式**：Anchor 任务 ID = 任务文件夹名（如 `马路风`）；Video 任务 ID = `任务文件夹__任务名称`（如 `马路风__唱歌版`）。同一任务文件夹的 Anchor 正式图和 Video 任务共享素材。
 
 ## 🔧 常用命令
 
@@ -86,8 +86,8 @@ tail -f workspace.log
 # 查看所有运行
 ls -la runtime/outputs/
 
-# 查看特定数据目录的运行
-ls -la runtime/outputs/<数据目录>/
+# 查看特定任务文件夹的运行
+ls -la runtime/outputs/<任务文件夹>/
 
 # 列出所有最终视频
 find runtime/outputs -name "final.mp4"
@@ -205,19 +205,19 @@ Anchor 选项卡用于生成、审核和管理 Anchor 角色形象图。
 
 **步骤顺序**（共5步）：
 
-1. **数据目录 & 任务名** — 通过文件夹选择器选择「数据目录」（必填，同一目录可放多个视频任务），填写任务名称用于显示
+1. **任务文件夹 & 任务名** — 通过文件夹选择器选择「任务文件夹」（必填，同一文件夹可放多个视频任务），填写任务名称用于显示
 2. **特殊需求** — (可选) 用自然语言描述跨图替换需求，智能解析后应用
-3. **参考图片** — 通过顶部的「从数据目录选择」或「本机上传」添加参考图（图1, 图2, 图3...），每张图可展开绑定参考点、填写补充描述
+3. **参考图片** — 通过顶部的「从文件夹选择」或「本机上传」添加参考图（图1, 图2, 图3...），每张图可展开绑定参考点、填写补充描述
 4. **选择参考点与来源图** — 勾选参考点并为每个选择来源图
 5. **描述 & 生成** — 点击画质/风格标签、禁止项标签快捷选择，或手动输入
 
 ### 参考图片（步骤3）
 
-- 选择数据目录后，会检测并**分别提示**已有 Anchor 图：正式图（`anchors/` 根目录，含手动上传与「设为 Anchor」，可直接在视频任务里使用）与生成候选图（`generated/`，需「设为 Anchor」后固定到正式目录），两类分开统计、不再混称「已生成」
-- 添加按钮在参考图区域**顶部**：「从数据目录选择」从当前数据目录的 `anchors/anchor-references/` 选取已有图片（文件列表带缩略图预览，可复用之前生成 Anchor 用过的参考图），「本机上传」从本地上传新图片
+- 选择任务文件夹后，会检测并**分别提示**已有 Anchor 图：正式图（`anchors/` 根目录，含手动上传与「设为 Anchor」，可直接在视频任务里使用）与生成候选图（`generated/`，需「设为 Anchor」后固定到正式目录），两类分开统计、不再混称「已生成」
+- 添加按钮在参考图区域**顶部**：「从文件夹选择」从当前任务文件夹的 `anchors/anchor-references/` 选取已有图片（文件列表带缩略图预览，可复用之前生成 Anchor 用过的参考图），「本机上传」从本地上传新图片
 - 参考图以**多列网格**排列，顶部实时显示已添加张数
 - 每张参考图下方可填写**补充描述**（可选），用于向该参考图追加生成约束；输入实时保存，切换/新增图片不会丢失
-- 切换「数据目录」会清空已选参考图（弹窗确认，取消则保持不变）
+- 切换「任务文件夹」会清空已选参考图（弹窗确认，取消则保持不变）
 
 ### 快捷标签（步骤5）
 
@@ -230,10 +230,16 @@ Anchor 选项卡用于生成、审核和管理 Anchor 角色形象图。
 
 | 操作 | 说明 |
 |------|------|
-| 保存任务 | 「数据目录」必填（通过文件夹选择器选取），任务名称用于显示 |
+| 保存任务 | 「任务文件夹」必填（通过文件夹选择器选取），任务名称用于显示 |
 | 编辑任务 | 在任务列表中点击「编辑」加载已有配置 |
+| 任务排序 | 任务列表头部排序按钮三态切换：**时间 ↓ 最新在前**（默认）→ **时间 ↑ 最早在前** → **名字 A-Z**，按钮实时显示当前状态与方向（同样适用于 Anchor 任务列表） |
 | 删除任务 | 点击红色「删除」按钮，会同时删除关联的所有资产 |
 | 生成 | 保存后点击「生成」提交运行 |
+| 高级视频设置 | 表单第 4 栏「高级视频设置」折叠区（默认收起，summary 直接显示默认值：720p · 9:16 · 无音频 · 无水印 · MP4）。展开后可调整：分辨率（480p/720p/1080p）、宽高比（9:16/16:9/1:1/4:3/3:4）、生成音频（toggle 开关）、加水印（toggle 开关）、输出格式（MP4/WebM）。不展开则用默认值。任务 JSON 对应字段 `resolution`/`ratio`/`generate_audio`/`watermark`/`output_format`，均可选 |
+
+### 图片放大预览
+
+所有可放大的图片缩略图（视频任务素材图、「从文件夹选择」picker、Anchor 参考图卡片、Anchor 候选审核图）都支持**点击放大预览**：鼠标悬停显示放大光标，点击弹出大图（黑底遮罩），**再点图片或遮罩即关闭**（toggle 交互），也可按 ESC 或右上角「×」关闭。Anchor 参考图卡片点击图片仅放大预览，不会误触展开/收起。
 
 ### 审核与设为 Anchor
 
@@ -254,7 +260,7 @@ curl http://127.0.0.1:8913/api/anchor-tasks | jq
 curl http://127.0.0.1:8913/api/anchor-runs | jq
 
 # 删除 Anchor 任务
-curl -X DELETE http://127.0.0.1:8913/api/anchor-tasks/<数据目录>
+curl -X DELETE http://127.0.0.1:8913/api/anchor-tasks/<任务文件夹>
 
 # 查看 Anchor 候选（审核用）
 curl http://127.0.0.1:8913/api/anchor-runs/{run_id}/candidates | jq
@@ -277,13 +283,13 @@ curl -X POST http://127.0.0.1:8913/api/anchor-runs/{run_id}/unpromote \
 python run.py anchor list
 
 # 运行 Anchor 生成
-python run.py anchor run --task <数据目录> --candidates 4
+python run.py anchor run --task <任务文件夹> --candidates 4
 
 # 查看运行状态
-python run.py anchor status --task <数据目录> --run-id <运行ID>
+python run.py anchor status --task <任务文件夹> --run-id <运行ID>
 
 # 删除 Anchor 任务
-python run.py anchor delete --task <数据目录>
+python run.py anchor delete --task <任务文件夹>
 ```
 
 ## 💡 最佳实践
@@ -292,7 +298,7 @@ python run.py anchor delete --task <数据目录>
 ```bash
 # 备份重要视频后删除旧运行
 du -sh runtime/outputs/*/  # 查看占用
-rm -rf runtime/outputs/<数据目录>/<旧运行ID>/
+rm -rf runtime/outputs/<任务文件夹>/<旧运行ID>/
 ```
 
 ### 2. 监控进度

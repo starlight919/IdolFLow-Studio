@@ -14,6 +14,7 @@ const store = {
   currentTask: null,
   pendingTask: null,
   pendingLyricsTimestamps: null,
+  taskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name'
 
   // ========== Asset Picker ==========
   assetPickerCategory: '',
@@ -39,6 +40,7 @@ const store = {
   pendingAnchorTask: null,
   anchorPickerMode: false,
   currentAnchorTask: null,
+  anchorTaskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name'
 
   // ========== Review ==========
   reviewManifest: null,

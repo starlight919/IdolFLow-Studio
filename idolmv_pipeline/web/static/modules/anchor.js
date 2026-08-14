@@ -180,7 +180,7 @@ export async function checkAnchorRefDir() {
   const pathEl = $('#anchor-ref-path');
   const dataDir = $('#anchor-id')?.value.trim();
 
-  // 数据目录变化时清空旧目录残留的参考图。
+  // 任务文件夹变化时清空旧目录残留的参考图。
   // 手动在输入框改目录走 oninput（不经过 chooseFolder），这里检测目录变化幂等兜底；
   // 通过「浏览」选择器切换时 chooseFolder 已清空，此处 store.anchorReferences 已为空，无副作用。
   if (store._anchorDir !== dataDir) {
@@ -193,7 +193,7 @@ export async function checkAnchorRefDir() {
     store._anchorDir = dataDir;
   }
 
-  // 未填数据目录 → 提示先填
+  // 未填任务文件夹 → 提示先填
   if (!dataDir) {
     if (needDir) needDir.style.display = '';
     if (empty) empty.style.display = 'none';
@@ -203,7 +203,7 @@ export async function checkAnchorRefDir() {
   }
   if (needDir) needDir.style.display = 'none';
 
-  // 已填数据目录 → 检查 anchors/anchor-references/ 是否有图片
+  // 已填任务文件夹 → 检查 anchors/anchor-references/ 是否有图片
   const rel = `${dataDir}/anchors/anchor-references`;
   if (pathEl) pathEl.textContent = `data_root/${rel}`;
   let hasRefImage = false;
@@ -278,7 +278,7 @@ export function renderAnchorReferences() {
   if (countEl) countEl.textContent = String(store.anchorReferences.length);
 
   if (!store.anchorReferences.length) {
-    list.innerHTML = '<p class="hint">尚未添加参考图片。使用上方的「从数据目录选择」或「本机上传」添加。</p>';
+    list.innerHTML = '<p class="hint">尚未添加参考图片。使用上方的「从文件夹选择」或「本机上传」添加。</p>';
     renderAspectSourceSummary();
     return;
   }
@@ -302,15 +302,14 @@ export function renderAnchorReferences() {
       const labels = boundAspects.map((k) => store.anchorPresets[k]?.label || k);
       const hasBindings = boundAspects.length > 0;
       return `<article class="reference-card" id="ref-card-${i}">
-        <div class="ref-thumb-wrap" onclick="toggleRefExpand(${i})">
+        <div class="ref-thumb-wrap">
           <img class="reference-thumb" src="${anchorReferencePreview(r)}" loading="lazy">
-          <span class="ref-expand-icon">▾</span>
         </div>
         <div class="reference-summary">
-          <strong onclick="toggleRefExpand(${i})" style="cursor:pointer">图${i + 1}: ${escapeHtml(r.file.split('/').pop())}</strong>
+          <strong onclick="toggleRefExpand(${i})" style="cursor:pointer">图${i + 1}: ${escapeHtml(r.file.split('/').pop())} <span class="ref-expand-hint">▾</span></strong>
           ${hasBindings
             ? `<span class="ref-aspect-tags">${labels.map((l) => `<span class="ref-aspect-tag">${escapeHtml(l)}</span>`).join(' ')}</span>`
-            : '<span class="ref-aspect-tags muted">点击收起</span>'}
+            : '<span class="ref-aspect-tags muted">点击标题展开配置</span>'}
           <label class="watermark-option">
             <input type="checkbox" ${r.remove_watermark ? 'checked' : ''} onchange="toggleAnchorWatermark(${i}, this.checked)">
             <span>去除水印/文字</span>
@@ -345,9 +344,9 @@ function toggleRefExpand(refIndex) {
   const el = document.getElementById(`ref-expand-${refIndex}`);
   if (!el) return;
   el.hidden = !el.hidden;
-  // Update the expand icon
-  const icon = document.querySelector(`#ref-card-${refIndex} .ref-expand-icon`);
-  if (icon) icon.textContent = el.hidden ? '▸' : '▾';
+  // 更新标题里的展开提示箭头
+  const hint = document.querySelector(`#ref-card-${refIndex} .ref-expand-hint`);
+  if (hint) hint.textContent = el.hidden ? '▾' : '▴';
 }
 window.toggleRefExpand = toggleRefExpand;
 
@@ -397,7 +396,7 @@ export async function saveAnchorTask(event) {
   // The anchor-id field IS the data directory name — it must be filled in.
   const taskId = $('#anchor-id').value.trim();
   if (!taskId) {
-    toast('请先选择数据目录');
+    toast('请先选择任务文件夹');
     return null;
   }
   const pending = store.anchorReferences.filter((r) => r._blob);
@@ -417,7 +416,7 @@ export async function saveAnchorTask(event) {
     }
   }
 
-  // 编辑已有任务且改了数据目录（id）→ 让用户选择「新建」还是「更新」
+  // 编辑已有任务且改了任务文件夹（id）→ 让用户选择「新建」还是「更新」
   const editingId = store.currentAnchorTask?.id;
   if (editingId && editingId !== taskId) {
     showAnchorSaveModeDialog(taskId, editingId);
@@ -437,7 +436,7 @@ async function _doSaveAnchorTask(taskId) {
   // 同名任务检查（更新模式除外）
   const existing = store.anchorTasks?.find((t) => t.id === taskId);
   if (existing && existing.id !== editingId) {
-    throw new Error(`同名数据目录"${taskId}"已有 Anchor 任务，请改名或选择更新已有任务`);
+    throw new Error(`同名任务文件夹"${taskId}"已有 Anchor 任务，请改名或选择更新已有任务`);
   }
   // 更新模式且改了 id：先删旧任务，再保存新任务
   if (editingId && editingId !== taskId) {
@@ -460,7 +459,7 @@ function showAnchorSaveModeDialog(taskId, editingId) {
   modal.className = 'modal';
   modal.innerHTML = `<div class="modal-card" style="max-width:400px">
     <h3>保存方式</h3>
-    <p>你正在编辑已有 Anchor 任务 <strong>${escapeHtml(store.currentAnchorTask?.name || '')}</strong>，但修改了数据目录，这会导致创建新任务。</p>
+    <p>你正在编辑已有 Anchor 任务 <strong>${escapeHtml(store.currentAnchorTask?.name || '')}</strong>，但修改了任务文件夹，这会导致创建新任务。</p>
     <div class="actions" style="flex-direction:column;gap:8px">
       <button onclick="this.closest('.modal').remove(); window._anchorSaveAsNew?.()" style="width:100%">保存为新任务</button>
       <button class="secondary" onclick="this.closest('.modal').remove(); window._anchorUpdateExisting?.()" style="width:100%">更新原任务</button>
@@ -692,12 +691,16 @@ export async function loadAnchorTasks() {
     orphaned = await api('/api/anchor-tasks/orphaned');
   } catch (_) { /* ignore orphan fetch errors */ }
   store.orphanedAnchorTasks = orphaned;
+  _renderAnchorTaskList();
+}
+
+function _renderAnchorTaskList() {
   const list = $('#anchor-task-list');
   if (!list) return;
 
   // Merge orphaned tasks into the regular list — each orphan is shown as a
   // disabled card with a single "恢复" action, same layout as normal tasks.
-  const orphanCards = orphaned.map((o) => ({
+  const orphanCards = (store.orphanedAnchorTasks || []).map((o) => ({
     id: o.task_id,
     name: o.task_name,
     _orphan: true,
@@ -706,6 +709,16 @@ export async function loadAnchorTasks() {
   }));
 
   const all = [...store.anchorTasks.map((t) => ({ ...t, _orphan: false })), ...orphanCards];
+
+  // 排序：默认按最后编辑时间倒序，可切换为时间升序或名字
+  all.sort((a, b) => {
+    if (store.anchorTaskSort === 'name') {
+      return (a.name || a.id).localeCompare(b.name || b.id, 'zh-Hans-CN');
+    }
+    return store.anchorTaskSort === 'time-asc'
+      ? (a.mtime || 0) - (b.mtime || 0)
+      : (b.mtime || 0) - (a.mtime || 0);
+  });
 
   const html = all
     .map(
@@ -733,6 +746,18 @@ export async function loadAnchorTasks() {
     )
     .join('');
   list.innerHTML = html || renderEmptyState('🧩', '还没有 Anchor 任务', '使用表单生成候选图片后可设为 Anchor');
+}
+
+export function toggleAnchorTaskSort() {
+  const order = ['time-desc', 'time-asc', 'name'];
+  store.anchorTaskSort = order[(order.indexOf(store.anchorTaskSort) + 1) % order.length];
+  const btn = $('#anchor-task-sort-toggle');
+  if (btn) {
+    const labels = { 'time-desc': '时间 ↓ 最新在前', 'time-asc': '时间 ↑ 最早在前', name: '名字 A-Z' };
+    btn.textContent = labels[store.anchorTaskSort] || '排序';
+    btn.title = '点击切换排序方式';
+  }
+  _renderAnchorTaskList();
 }
 
 export async function recoverAnchorTask(taskId) {
@@ -830,16 +855,20 @@ export async function loadAnchorRuns() {
       : renderEmptyState('🖼️', '还没有 Anchor 运行记录', '提交 Anchor 任务后将在此显示进度');
   }
 
-  // ── Populate review dropdown (only completed runs with manifests) ──
+  // ── Populate review dropdown (runs with manifest + running/queued，便于查看生成状态) ──
   const select = $('#anchor-review-run');
   if (!select) return;
   const current = select.value;
-  const completed = store.anchorRuns.filter((r) => r.manifest);
-  select.innerHTML = completed
-    .map((r) => `<option value="${r.run_id}">${escapeHtml(r.task_name)} · ${r.run_id}</option>`)
+  const reviewable = store.anchorRuns.filter((r) => r.manifest || ['running', 'queued'].includes(r.status));
+  select.innerHTML = reviewable
+    .map((r) => {
+      const label = ['running', 'queued'].includes(r.status) ? `${escapeHtml(r.task_name)} · ${r.run_id}（生成中）` : `${escapeHtml(r.task_name)} · ${r.run_id}`;
+      return `<option value="${r.run_id}">${label}</option>`;
+    })
     .join('');
-  if (completed.some((r) => r.run_id === current)) select.value = current;
-  if (select.value) loadAnchorReview(select.value);
+  if (reviewable.some((r) => r.run_id === current)) select.value = current;
+  // 仅当运行记录变化（首次或切换）时才加载/重启审核轮询；运行中的刷新由 loadAnchorReview 自己的定时器负责
+  if (select.value && anchorReviewLoadingId !== select.value) loadAnchorReview(select.value);
 }
 
 function anchorRunCard(r) {
@@ -874,21 +903,68 @@ export function openAnchorPoll() {
 
 // ── Anchor Review ───────────────────────────────────────────────────────────
 
+// Anchor 运行记录轮询（仅用于运行中实时刷新）
+let anchorReviewPollTimer = null;
+let anchorReviewLoadingId = null;
+
 export async function loadAnchorReview(runId) {
+  clearInterval(anchorReviewPollTimer);
   if (!runId) return;
-  store.anchorManifest = await api(`/api/anchor-runs/${runId}/manifest`);
-  store.anchorReviewState = store.anchorManifest.review_state || { votes: {}, published: {} };
-  renderAnchorReview();
+  anchorReviewLoadingId = runId;
+  // 先加载一次
+  await _fetchAnchorManifest(runId);
+  // 若该 run 仍在生成（manifest 可能尚未写入），轮询等待并显示「正在生成」
+  anchorReviewPollTimer = setInterval(async () => {
+    if (anchorReviewLoadingId !== runId) { clearInterval(anchorReviewPollTimer); return; }
+    const run = store.anchorRuns?.find((r) => r.run_id === runId);
+    if (!run || (run.status !== 'running' && run.status !== 'queued')) {
+      clearInterval(anchorReviewPollTimer);
+      return;
+    }
+    await _fetchAnchorManifest(runId);
+  }, 3000);
+}
+
+async function _fetchAnchorManifest(runId) {
+  if (anchorReviewLoadingId && anchorReviewLoadingId !== runId) return;
+  try {
+    store.anchorManifest = await api(`/api/anchor-runs/${runId}/manifest`);
+    if (anchorReviewLoadingId && anchorReviewLoadingId !== runId) return;
+    store.anchorReviewState = store.anchorManifest.review_state || { votes: {}, published: {} };
+    renderAnchorReview();
+  } catch (e) {
+    // manifest 尚未写入（正在生成中）：显示「正在生成」占位，不保留旧图
+    console.error('Failed to load anchor manifest:', e);
+    if (anchorReviewLoadingId && anchorReviewLoadingId !== runId) return;
+    store.anchorManifest = null;
+    store.anchorReviewState = { votes: {}, published: {} };
+    renderAnchorReview();
+  }
 }
 
 function renderAnchorReview() {
   const run = $('#anchor-review-run').value;
-  if (!store.anchorManifest) return;
 
   renderAnchorReviewToolbar();
 
   const content = $('#anchor-review-content');
   if (!content) return;
+
+  // 正在生成或暂无 manifest：显示状态占位，而非保留旧图
+  if (!store.anchorManifest) {
+    const currentRun = store.anchorRuns?.find((r) => r.run_id === run);
+    const msg = currentRun && (currentRun.status === 'running' || currentRun.status === 'queued')
+      ? '生成中，候选图完成后将实时出现在这里…'
+      : '暂无可审核的候选图';
+    content.innerHTML = `<div class="empty-state"><p>${msg}</p></div>`;
+    return;
+  }
+
+  if (!store.anchorManifest.candidates || store.anchorManifest.candidates.length === 0) {
+    content.innerHTML = `<div class="empty-state"><p>暂无可审核的候选图</p></div>`;
+    return;
+  }
+
   content.innerHTML = store.anchorManifest.candidates
     .map((c) => {
       const used = store.anchorReviewState.published[c.id];
@@ -959,7 +1035,7 @@ export async function pickAnchorReferences() {
   store.assetPickerCategory = 'anchor-references';
   const dataDir = $('#anchor-id').value.trim();
   if (!dataDir) {
-    toast('请先填写数据目录（步骤 1），再选择图片');
+    toast('请先填写任务文件夹（步骤 1），再选择图片');
     return;
   }
   // 参考图在 <dataDir>/anchors/anchor-references/，直接进入该子目录

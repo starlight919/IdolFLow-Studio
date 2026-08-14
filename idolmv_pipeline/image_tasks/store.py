@@ -36,12 +36,13 @@ class AnchorTaskStore:
         result = []
         if not self.root.is_dir():
             return result
-        for path in sorted(self.root.glob("*/anchors/anchor-task.json")):
+        for path in sorted(self.root.glob("*/anchors/anchor-task.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.parent.name
                 task["data_dir"] = data_dir
                 task["id"] = data_dir  # anchor task id = data dir
+                task["mtime"] = path.stat().st_mtime
                 result.append(task)
             except (OSError, json.JSONDecodeError):
                 continue

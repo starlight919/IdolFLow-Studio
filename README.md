@@ -10,7 +10,7 @@ Anchor 设计、视频生成、任务运行、候选审核与下载的一体化 
 
 📖 **快速参考**: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) | 📚 **完整文档**: [docs/README.md](docs/README.md) | 📝 **更新日志**: [docs/CHANGELOG.md](docs/CHANGELOG.md)
 
-完整部署、配置、数据目录、工作流、CLI、Git 管理和排错说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+完整部署、配置、任务文件夹、工作流、CLI、Git 管理和排错说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 ## 首次启动
 
@@ -191,20 +191,20 @@ bash scripts/start-daemon.sh
 bash scripts/stop.sh
 ```
 
-## 默认数据目录
+## 默认任务文件夹
 
 ```text
-data/<数据目录>/                  # 素材、任务配置、Anchor 模块
+data/<任务文件夹>/                  # 素材、任务配置、Anchor 模块
   ├── anchors/                    # Anchor 参考图、生成候选、正式图（上传 / 设为 Anchor）
   ├── references/                 # 参考音视频（视频 + 音频）
   └── tasks/                      # Video 任务配置（可有多个）
-runtime/outputs/<数据目录>/        # 生成的视频
-runtime/work/<数据目录>/           # 临时文件
+runtime/outputs/<任务文件夹>/        # 生成的视频
+runtime/work/<任务文件夹>/           # 临时文件
 ```
 
 路径可在 `video-workspace.json` 中修改。
 
-**生成的视频位置**: `runtime/outputs/<数据目录>/<run_id>/anchor-X/candidate-XX/final.mp4`
+**生成的视频位置**: `runtime/outputs/<任务文件夹>/<run_id>/anchor-X/candidate-XX/final.mp4`
 
 详细说明见 [docs/guides/VIDEO_LOCATIONS.md](docs/guides/VIDEO_LOCATIONS.md) | 变更历史见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
 
@@ -216,12 +216,12 @@ runtime/work/<数据目录>/           # 临时文件
 
 | 层级 | 说明 | 例子 |
 |------|------|------|
-| **数据目录** `data_dir` | 一组相关素材的总目录，跨任务共享 | `马路风` |
+| **任务文件夹** `data_dir` | 一组相关素材的总目录，跨任务共享 | `马路风` |
 | **任务** `task` | 一个具体的生成配置（同一目录可多个） | `马路风__唱歌版` |
 | **运行** `run` | 一次实际执行（每点一次启动生成产生一个） | `run_20260812_174354` |
 
 ```
-data/马路风/                  ← 数据目录
+data/马路风/                  ← 任务文件夹
   ├── anchors/                ← Anchor 形象图（GPT Image 2 生成）
   ├── references/             ← 参考音视频（视频 + 音频）
   └── tasks/                  ← 视频任务配置
@@ -245,8 +245,8 @@ Anchor 是整个系统的"主角"抽象。它不是一张图，而是一组**可
 
 **Anchor 的核心思路**：把"人物形象"与"视频任务"解耦。
 
-1. **先造角色，再做视频**：在 Anchor 面板上传参考图（脸、服装、场景）或从数据目录选取已有参考图（`anchors/anchor-references/`），生成多个候选形象图（如"站姿正面""坐姿""全身""特写"），存入目录的 `anchors/` 子目录。
-2. **跨任务复用**：同一个数据目录下创建多个视频任务（唱歌版、跳舞版），都引用同一批 Anchor 图，保证不同任务里的主角形象一致。
+1. **先造角色，再做视频**：在 Anchor 面板上传参考图（脸、服装、场景）或从任务文件夹选取已有参考图（`anchors/anchor-references/`），生成多个候选形象图（如"站姿正面""坐姿""全身""特写"），存入目录的 `anchors/` 子目录。
+2. **跨任务复用**：同一个任务文件夹下创建多个视频任务（唱歌版、跳舞版），都引用同一批 Anchor 图，保证不同任务里的主角形象一致。
 3. **每个 Anchor 独立出片**：一个任务会把每个 Anchor × 每个参考视频 × 候选数 组合生成视频。比如 2 个 Anchor × 1 个参考视频 × 4 候选 = 8 条候选视频。
 
 | 概念 | 说明 |
@@ -309,7 +309,21 @@ Seedance 的 `duration` 只接受整数秒，原始视频/音频往往是非整�
 
 > 📄 时长对齐的三种模式与设计思路详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md#时长处理)
 
-### 6. Prompt 分层架构（V2）
+### 6. 高级视频设置（可选）
+
+视频任务表单第 4 栏「高级视频设置」折叠区可调整 Seedance 2.5 的生成参数。折叠状态下 summary 直接显示当前默认值，无需展开即可判断是否需要调整：
+
+| 参数 | 默认值 | 可选值 | 说明 |
+|------|--------|--------|------|
+| 分辨率 | `720p` | `480p` / `720p` / `1080p` | 越高越慢，消耗额度越多 |
+| 宽高比 | `9:16` | `9:16` / `16:9` / `1:1` / `4:3` / `3:4` | 竖屏 / 横屏 / 方形 / 经典 |
+| 生成音频 | 关 | 开 / 关 | 开启后 Seedance 2.5 生成音频；关闭时口型任务仍通过参考音频回灌 |
+| 加水印 | 关 | 开 / 关 | 开启后生成视频带 Seedance 水印 |
+| 输出格式 | `mp4` | `mp4` / `webm` | MP4 兼容性最好；WebM 体积更小 |
+
+默认值适用大多数场景。任务 JSON 对应字段 `resolution`/`ratio`/`generate_audio`/`watermark`/`output_format`，均可选，不填用默认值。
+
+### 7. Prompt 分层架构（V2）
 
 每次生成使用 7 层语义化 prompt：任务定位 → 参考分工 → 表演约束 → 保留要求 → 镜头策略 → 画质 → 自定义约束。系统会根据**是否有视频/音频参考**自动调整表演约束（如纯音频驱动时不依赖视频口型）。
 

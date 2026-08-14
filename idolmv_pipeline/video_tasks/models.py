@@ -98,6 +98,8 @@ class VideoTaskAdapter:
     ratio: str = "9:16"
     resolution: str = "720p"
     generate_audio: bool = False
+    watermark: bool = False
+    output_format: str = "mp4"
     camera_policy: CameraPolicy | None = None
     source_root: Path = DEFAULT_DATA_ROOT
     task_path: Path | None = None

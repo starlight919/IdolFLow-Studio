@@ -254,13 +254,19 @@ export async function browseAssets(path) {
     // 当前目录下符合类别的文件数
     const currentFiles = data.items.filter((item) => !item.directory && allowed(item));
     // 若当前目录（默认子目录）没有可选文件，但任务主目录里有同类文件，引导用户去主目录找
+    // 注意：root 目录（如 anchor-references/）可能不存在，请求失败时须跳过引导，否则会中断
+    // 后续的列表渲染，导致上一次打开 picker 的旧文件残留显示。
     let rootHint = '';
     if (currentFiles.length === 0 && store.assetPickerPath && store.assetPickerPath !== root) {
-      const rootData = await api(`/api/files?root=data_root&path=${encodeURIComponent(root)}`);
-      const rootFiles = (rootData.items || []).filter((item) => !item.directory && allowed(item));
-      if (rootFiles.length > 0) {
-        const label = store.assetPickerCategory === 'anchors' ? '图片' : '音视频';
-        rootHint = `<button class="asset-root-hint" onclick="browseAssets('${escapeAttr(root)}')"><span>💡 当前目录没有可选${label}，主目录里有 ${rootFiles.length} 个</span><span>去主目录 ›</span></button>`;
+      try {
+        const rootData = await api(`/api/files?root=data_root&path=${encodeURIComponent(root)}`);
+        const rootFiles = (rootData.items || []).filter((item) => !item.directory && allowed(item));
+        if (rootFiles.length > 0) {
+          const label = store.assetPickerCategory === 'anchors' ? '图片' : '音视频';
+          rootHint = `<button class="asset-root-hint" onclick="browseAssets('${escapeAttr(root)}')"><span>💡 当前目录没有可选${label}，主目录里有 ${rootFiles.length} 个</span><span>去主目录 ›</span></button>`;
+        }
+      } catch {
+        // root 目录不存在，跳过主目录引导，继续渲染当前目录列表
       }
     }
 
@@ -301,7 +307,7 @@ export async function browseAssets(path) {
       // 空状态提示：当前目录（及其可见子目录）都没有可选文件
       (visibleItems.length === 0 && !hasVisibleDirs
         ? (store.assetPickerCategory === 'anchor-references'
-            ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<br>可以用「本机上传」从本机上传，或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<数据目录>/anchors/anchor-references')}</code></div>`
+            ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<br>可以用「本机上传」从本机上传，或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<任务文件夹>/anchors/anchor-references')}</code></div>`
             : `<div class="asset-empty-tip">📂 当前目录没有可选素材。</div>`)
         : '');
   } catch (e) {
@@ -382,7 +388,7 @@ export async function browseFolder(path) {
     store.folderPath = data.path === '.' ? '' : data.path;
     $('#folder-path').textContent = `data_root/${store.folderPath}`;
     const parent = store.folderPath.split('/').slice(0, -1).join('/');
-    // 只在顶层（data_root 根）对一级数据目录提供「删除文件夹」入口
+    // 只在顶层（data_root 根）对一级任务文件夹提供「删除文件夹」入口
     const isRoot = !store.folderPath;
     $('#folder-list').innerHTML =
       `<div class="folder-new">
@@ -394,7 +400,7 @@ export async function browseFolder(path) {
         .filter((i) => i.directory)
         .map((i) => `<div class="folder-row">
           <button class="folder-row-main" onclick="browseFolder('${escapeAttr(i.path)}')"><span>${escapeHtml(i.name)}</span><span>›</span></button>
-          ${isRoot ? `<button class="folder-row-del" onclick="confirmDeleteDataDir('${escapeAttr(i.name)}')" title="删除此数据目录及其所有任务与生成产物">🗑</button>` : ''}
+          ${isRoot ? `<button class="folder-row-del" onclick="confirmDeleteDataDir('${escapeAttr(i.name)}')" title="删除此任务文件夹及其所有任务与生成产物">🗑</button>` : ''}
         </div>`)
         .join('');
   } catch (e) {
@@ -459,7 +465,7 @@ export async function confirmDeleteDataDir(dataDir) {
   const htmlDesc = body + summary;
 
   const ok = await window.showDeleteConfirm({
-    title: '删除整个数据目录',
+    title: '删除整个任务文件夹',
     htmlDesc,
     showFileOption: false,
     confirmText: '确认删除整个目录',
@@ -515,13 +521,13 @@ export async function chooseFolder() {
     renderVideoAssetPreviews();
   }
 
-  // 切换 Anchor 数据目录时，清空上一个目录残留的参考图（与任务文件夹清空逻辑一致）
+  // 切换 Anchor 任务文件夹时，清空上一个目录残留的参考图（与任务文件夹清空逻辑一致）
   let anchorMod = null;
   if (inputId === '#anchor-id' && newPath !== oldPath) {
     const hasRefs = store.anchorReferences.length > 0;
     if (hasRefs) {
       const ok = await window.showDeleteConfirm({
-        title: '切换数据目录',
+        title: '切换任务文件夹',
         desc: `切换将清空已选的参考图片。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」`,
         showFileOption: false,
         confirmText: '确认切换',
@@ -545,7 +551,7 @@ export async function chooseFolder() {
   closeFolderPicker();
   // 选择的是任务文件夹时，检测目录内是否已有素材
   if (inputId === '#task-dir') checkTaskFolderEmpty();
-  // 选择的是 Anchor 数据目录时，检查目录内是否已有参考图
+  // 选择的是 Anchor 任务文件夹时，检查目录内是否已有参考图
   if (inputId === '#anchor-id') anchorMod?.checkAnchorRefDir?.();
 }
 
@@ -601,6 +607,12 @@ export function formTask() {
     lyrics: $('#lyrics').value.trim(),
     constraints: $('#constraints').value.trim(),
     lyrics_timestamps: store.currentTask?.lyrics_timestamps || store.pendingLyricsTimestamps || [],
+    // 高级视频设置（默认值与后端 VideoTaskAdapter 一致）
+    resolution: $('#video-resolution')?.value || '720p',
+    ratio: $('#video-ratio')?.value || '9:16',
+    generate_audio: $('#video-generate-audio')?.checked ?? false,
+    watermark: $('#video-watermark')?.checked ?? false,
+    output_format: $('#video-output-format')?.value || 'mp4',
   };
 }
 
@@ -782,9 +794,22 @@ function _taskConfigChips(t) {
 
 export async function loadTasks() {
   store.tasks = await api('/api/tasks');
+  _renderTaskList();
+}
+
+function _renderTaskList() {
   const list = $('#task-list');
   if (!list) return;
-  const html = store.tasks
+  const sorted = [...store.tasks].sort((a, b) => {
+    if (store.taskSort === 'name') {
+      return (a.name || a.id).localeCompare(b.name || b.id, 'zh-Hans-CN');
+    }
+    // 时间排序：time-desc 最新在前，time-asc 最早在前（mtime 缺省按 0 兜底）
+    return store.taskSort === 'time-asc'
+      ? (a.mtime || 0) - (b.mtime || 0)
+      : (b.mtime || 0) - (a.mtime || 0);
+  });
+  const html = sorted
     .map(
       (t) => `<article class="task" data-id="${escapeHtml(t.id)}">
         <div class="task-info">
@@ -802,6 +827,22 @@ export async function loadTasks() {
     )
     .join('');
   list.innerHTML = html || renderEmptyState('📋', '还没有保存任务', '填写表单后点击"保存任务"即可添加');
+}
+
+export function toggleTaskSort() {
+  // 三态循环：时间降序 → 时间升序 → 名字
+  const order = ['time-desc', 'time-asc', 'name'];
+  store.taskSort = order[(order.indexOf(store.taskSort) + 1) % order.length];
+  _updateSortButton('#task-sort-toggle', store.taskSort);
+  _renderTaskList();
+}
+
+function _updateSortButton(selector, mode) {
+  const btn = $(selector);
+  if (!btn) return;
+  const labels = { 'time-desc': '时间 ↓ 最新在前', 'time-asc': '时间 ↑ 最早在前', name: '名字 A-Z' };
+  btn.textContent = labels[mode] || '排序';
+  btn.title = '点击切换排序方式';
 }
 
 export function editTask(id) {
@@ -842,6 +883,18 @@ export function editTask(id) {
   $('#lyrics').value = t.lyrics || '';
   if (!store.currentTask.lyrics_timestamps) store.currentTask.lyrics_timestamps = [];
   $('#constraints').value = t.constraints || '';
+
+  // 回填高级视频设置（默认值与后端 VideoTaskAdapter 一致）
+  const resEl = $('#video-resolution');
+  if (resEl) resEl.value = t.resolution || '720p';
+  const ratioEl = $('#video-ratio');
+  if (ratioEl) ratioEl.value = t.ratio || '9:16';
+  const genAudioEl = $('#video-generate-audio');
+  if (genAudioEl) genAudioEl.checked = t.generate_audio === true;
+  const wmEl = $('#video-watermark');
+  if (wmEl) wmEl.checked = t.watermark === true;
+  const fmtEl = $('#video-output-format');
+  if (fmtEl) fmtEl.value = t.output_format || 'mp4';
 
   const radio = $(`[name=mode][value="${t.mode}"]`);
   if (radio) radio.checked = true;
@@ -1180,6 +1233,7 @@ let _lyricsTsState = {
   activeIndex: 0,
   audioUrl: null,
   extracting: false,
+  scrollY: null,
 };
 let _lyricsAudioEl = null;
 let _keyboardHelpShown = false;
@@ -1212,16 +1266,16 @@ function _isMediaFile(name) {
 }
 
 function _resolveAudioSource() {
-  // 优先用已保存任务的 references（含后端定位），否则回退到表单字段（未保存任务）
+  // 优先用表单当前的音视频引用（用户最新选择/切换的），表单为空时才回退到已保存任务
+  const { files } = _formReferenceFiles();
+  const formFile = files.find((f) => _isMediaFile(f));
+  if (formFile) {
+    return { source: 'form', index: 0, file: formFile };
+  }
   const saved = store.currentTask?.references || [];
   const firstSaved = saved.find((r) => _isMediaFile(r.file));
   if (firstSaved) {
     return { source: 'task', index: saved.indexOf(firstSaved), file: firstSaved.file };
-  }
-  const { files } = _formReferenceFiles();
-  const file = files.find((f) => _isMediaFile(f));
-  if (file) {
-    return { source: 'form', index: 0, file };
   }
   return null;
 }
@@ -1259,6 +1313,7 @@ export async function openLyricsTimestampsEditor() {
   }
 
   const modal = $('#lyrics-timestamps-modal');
+  _lyricsTsState.scrollY = window.scrollY;  // 记录滚动位置，关闭时恢复
   modal.hidden = false;
   if (!_keyboardHelpShown) {
     showLyricsShortcuts();
@@ -1318,6 +1373,11 @@ export function closeLyricsTimestampsEditor() {
     _lyricsAudioEl.load();
   }
   _lyricsTsState.audioUrl = null;
+  // 恢复打开弹窗前的滚动位置（避免关闭后页面滚回顶部）
+  if (typeof _lyricsTsState.scrollY === 'number') {
+    requestAnimationFrame(() => window.scrollTo({ top: _lyricsTsState.scrollY, behavior: 'auto' }));
+    _lyricsTsState.scrollY = null;
+  }
 }
 
 function _refreshAddButton() {

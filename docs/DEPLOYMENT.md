@@ -107,7 +107,7 @@ python run.py video run --task <id> --provider ngrok  # 本次运行强制 ngrok
 ## 目录与持久化
 
 ```text
-data/<数据目录>/
+data/<任务文件夹>/
 ├── anchors/                  # Anchor 模块
 │   ├── anchor-task.json
 │   ├── anchor-references/
@@ -119,8 +119,8 @@ data/<数据目录>/
 ├── references/               # 参考音视频（视频 + 音频统一落点）
 └── seedance/assets.json
 
-runtime/work/<数据目录>/
-runtime/outputs/<数据目录>/<run-id>/
+runtime/work/<任务文件夹>/
+runtime/outputs/<任务文件夹>/<run-id>/
 ```
 
 任务、素材和 Anchor 审核结果位于 `data/`；视频中间文件与运行结果位于 `runtime/`。这些目录默认被 Git 忽略。

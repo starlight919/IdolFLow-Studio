@@ -12,6 +12,7 @@ import {
   resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart, uploadAnchorReference,
   loadAnchorTasks, editAnchorTask, loadAnchorRuns, openAnchorPoll,
   regenerateAnchorBatch, promoteAnchor,
+  toggleAnchorTaskSort,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
   onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
@@ -24,7 +25,7 @@ import {
   taskFolderRelative, checkTaskFolderEmpty, updateUploadState, scrollToUpload, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
-  markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets,
+  markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
   closeAssets, previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
@@ -171,7 +172,7 @@ async function confirmDeleteTask(id) {
   const runCount = (store.runs || []).filter((r) => r.task_id === id).length;
 
   const title = `确认删除任务`;
-  const desc = `任务: ${escapeHtml(taskName)}\n数据目录: ${escapeHtml(dataDir || '(未设置)')}\n关联运行: ${runCount} 条\n\n删除后任务配置将被移除。${runCount > 0 ? '还可选择同时清理关联的运行记录和生成文件。' : ''}`;
+  const desc = `任务: ${escapeHtml(taskName)}\n任务文件夹: ${escapeHtml(dataDir || '(未设置)')}\n关联运行: ${runCount} 条\n\n删除后任务配置将被移除。${runCount > 0 ? '还可选择同时清理关联的运行记录和生成文件。' : ''}`;
   const confirmed = await showDeleteConfirm({ title, desc, showFileOption: true });
   if (!confirmed) return;
 
@@ -187,7 +188,7 @@ async function confirmDeleteTask(id) {
 
 async function confirmDeleteAnchorTask(id) {
   const title = `确认删除 Anchor 任务`;
-  const desc = `数据目录: ${escapeHtml(id)}\n\n删除后将移除 anchors/ 子目录（含参考图、生成候选、已选图片）。此操作不可撤销。`;
+  const desc = `任务文件夹: ${escapeHtml(id)}\n\n删除后将移除 anchors/ 子目录（含参考图、生成候选、已选图片）。此操作不可撤销。`;
   const confirmed = await showDeleteConfirm({ title, desc, showFileOption: false });
   if (!confirmed) return;
 
@@ -360,16 +361,18 @@ Object.assign(window, {
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
-  saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets,
+  saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,
+  // Lightbox
+  closeImageLightbox,
   // Anchor
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
   requestAnchorStart, uploadAnchorReference, loadAnchorTasks, editAnchorTask,
   loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
-  promoteAnchor,
+  promoteAnchor, toggleAnchorTaskSort,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
   onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
@@ -394,6 +397,7 @@ const MODAL_CLOSE_FNS = {
   'delete-modal': closeDeleteModal,
   'help-modal': closeHelp,
   'lyrics-timestamps-modal': closeLyricsTimestampsEditor,
+  'image-lightbox': closeImageLightbox,
 };
 
 function visibleModal() {
@@ -449,10 +453,59 @@ function setupModalAccessibility() {
   });
 }
 
+// ── 图片放大预览 Lightbox ────────────────────────────────────────────────────
+// 覆盖主页面素材图（#anchor-file-previews / #reference-file-previews）、
+// Anchor 参考图卡片、asset picker 缩略图。用捕获阶段委托，以便在
+// Anchor 参考图卡片的 inline onclick（toggleRefExpand，冒泡阶段）之前拦截图片点击。
+function setupImageLightbox() {
+  // 点击遮罩或图片本身都关闭（toggle 交互）；阻止冒泡，避免关闭后触发其他委托逻辑
+  const boxEl = $('#image-lightbox');
+  if (boxEl) {
+    boxEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeImageLightbox();
+    });
+  }
+  document.addEventListener('click', (e) => {
+    const img = e.target.closest('.asset-figure img, .file-thumb, .reference-thumb, .anchor-review-card img');
+    if (!img) return;
+    // Anchor 参考图卡片的缩略图点击仅放大，不触发展开/收起
+    if (img.classList.contains('reference-thumb')) {
+      e.stopPropagation();
+      openImageLightbox(img.currentSrc || img.src, '点击空白处或按 ESC 关闭');
+      return;
+    }
+    // 主页面 / picker / 审核缩略图：直接放大
+    const figcap = img.closest('figcaption');
+    const meta = img.closest('.review-meta')?.textContent?.trim();
+    openImageLightbox(img.currentSrc || img.src, figcap?.textContent?.trim() || meta || '');
+  }, true); // capture=true 提前拦截
+}
+
+function openImageLightbox(src, caption = '') {
+  const box = $('#image-lightbox');
+  const img = $('#lightbox-img');
+  if (!box || !img || !src) return;
+  img.src = src;
+  const cap = $('#lightbox-caption');
+  if (cap) cap.textContent = caption;
+  box.hidden = false;
+}
+
+function closeImageLightbox() {
+  const box = $('#image-lightbox');
+  if (box) {
+    box.hidden = true;
+    const img = $('#lightbox-img');
+    if (img) img.src = '';
+  }
+}
+
 async function init() {
   initTheme();
   setupDelegatedHandlers();
   setupModalAccessibility();
+  setupImageLightbox();
   updateMode();
   store.workspaceSettings = await loadSettings();
   // 绑定表单提交（type=submit 按钮需要 form submit 事件才能调用保存逻辑）

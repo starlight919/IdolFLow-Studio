@@ -21,5 +21,12 @@
     }
   ],
   "lyrics_file": "lyrics.txt",
-  "constraints": "保持人物身份、服装和背景一致"
+  "constraints": "保持人物身份、服装和背景一致",
+
+  "_advanced_video_settings_optional": "以下为高级视频设置，均可选，不填用默认值",
+  "resolution": "720p",
+  "ratio": "9:16",
+  "generate_audio": false,
+  "watermark": false,
+  "output_format": "mp4"
 }
