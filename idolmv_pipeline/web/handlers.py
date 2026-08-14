@@ -702,9 +702,11 @@ def handle_tasks_delete(handler, path: str):
 @_register("POST", "/api/prompt-preview")
 def handle_prompt_preview(handler, path: str):
     data = read_json(handler)
-    has_audio = any(ref.get("pass_reference_audio", True) for ref in data.get("references", []))
+    references = data.get("references", [])
+    has_audio = any(ref.get("pass_reference_audio", True) for ref in references)
+    has_video = any(ref.get("pass_reference_video", True) for ref in references)
     camera_policy = data.get("camera_policy")
-    json_response(handler, 200, {"prompt": build_prompt(data["mode"], data.get("lyrics", ""), data.get("constraints", ""), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=data.get("lyrics_timestamps"))})
+    json_response(handler, 200, {"prompt": build_prompt(data["mode"], data.get("lyrics", ""), data.get("constraints", ""), has_audio_ref=has_audio, has_video_ref=has_video, camera_policy=camera_policy, lyrics_timestamps=data.get("lyrics_timestamps"))})
 
 
 def _task_assets(handler, task_id: str) -> dict:

@@ -108,21 +108,34 @@ class VideoTaskRunner:
         for reference in self.adapter.references:
             segments = self._segments(reference)
             audio = self._reference_audio(reference)
-            if not audio.exists():
-                source = self.adapter.task_dir / (reference.audio_file or reference.file)
+            source = self.adapter.task_dir / (reference.audio_file or reference.file)
+            # 用源文件指纹判断是否需要重新生成音频缓存，避免切换音视频后沿用旧的 work_dir 缓存
+            fingerprint_marker = audio.with_name("audio.src.json")
+            current_fp = _fingerprint(source) if source.exists() else None
+            cached_fp = None
+            if fingerprint_marker.exists():
+                try:
+                    cached_fp = json.loads(fingerprint_marker.read_text())
+                except Exception:
+                    cached_fp = None
+            audio_refreshed = False
+            if not audio.exists() or cached_fp != current_fp:
                 if reference.pass_reference_video:
                     # 视频模式：从视频提取音频
                     extract_audio(source, audio)
                 else:
                     # 纯音频模式：reference.file 本身就是音频，直接拷贝（对等视频提取音频，不再二次转码）
                     shutil.copyfile(source, audio)
+                if current_fp is not None:
+                    fingerprint_marker.write_text(json.dumps(current_fp))
+                audio_refreshed = True
             pad_mode = segments[0][4] if segments else "back"
             if segments and len(segments) == 1:
                 seedance_duration = segments[0][2]
                 actual = probe_duration(audio)
                 if actual < seedance_duration and reference.pass_reference_audio:
                     padded = self._reference_audio_padded(reference)
-                    if not padded.exists():
+                    if not padded.exists() or audio_refreshed:
                         pad_audio_to(audio, padded, seedance_duration, pad_mode=pad_mode)
                     object.__setattr__(reference, 'audio_file_url', str(padded.resolve()))
                 elif reference.pass_reference_audio and not reference.audio_file_url:
@@ -135,8 +148,19 @@ class VideoTaskRunner:
                 continue
             for index, (start, duration, _, original_total, seg_pad_mode) in enumerate(segments):
                 segment = self._reference_segment(reference, index)
-                if not segment.exists():
-                    trim_reference(self.adapter.task_dir / reference.file, segment, start, duration, reference.crop_filter, pad_mode=seg_pad_mode, original_duration=original_total)
+                seg_source = self.adapter.task_dir / reference.file
+                seg_fp = _fingerprint(seg_source) if seg_source.exists() else None
+                seg_marker = segment.with_name(f"segment_{index:02d}.src.json")
+                seg_cached = None
+                if seg_marker.exists():
+                    try:
+                        seg_cached = json.loads(seg_marker.read_text())
+                    except Exception:
+                        seg_cached = None
+                if not segment.exists() or seg_cached != seg_fp:
+                    trim_reference(seg_source, segment, start, duration, reference.crop_filter, pad_mode=seg_pad_mode, original_duration=original_total)
+                    if seg_fp is not None:
+                        seg_marker.write_text(json.dumps(seg_fp))
                 check_frame = segment.with_name(f"segment_{index:02d}_check.jpg")
                 if not check_frame.exists():
                     extract_check_frame(segment, check_frame)

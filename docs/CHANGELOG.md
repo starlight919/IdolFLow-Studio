@@ -64,6 +64,9 @@
 - 修复歌词时间戳弹窗保存后页面滚回顶部：打开弹窗时记录 `window.scrollY`，关闭时恢复，保证回到原停留位置
 - 修复切换音视频后打歌词仍用旧音频：`_resolveAudioSource` 此前优先用已保存任务的 `references`（编辑回填的旧值），现改为**优先读取表单当前的音视频引用**（`#references`/`#audio-refs`），表单为空时才回退到已保存任务
 - 修复纯音频输入（仅音频、`pass_reference_video=false`）的音频处理与视频提取音频不对等：此前纯音频也走 `extract_audio`（从视频提取音频）二次转码，现改为纯音频模式下直接 `shutil.copyfile` 拷贝原音频文件（视频模式仍走 `extract_audio`），两者对等且音频 asset 均正确上传
+- 修复切换音视频后沿用旧缓存：`prepare()` 此前用 `audio.exists()`/`segment.exists()` 判断是否重新生成音频/切片，切换音视频后旧 `work_dir` 缓存仍存在导致沿用旧素材；现改为用源文件指纹（`path+size+mtime_ns` 写入 `.src.json` 标记）判断，源文件变化即重新提取音频/拷贝音频/重切视频
+- 优化对口型（lip_sync）prompt 的自然律动约束：原「身体主体保持稳定，不主动增加明显手势或大幅身体动作」导致人物僵硬如背景板，现改为「肢体和身体随音乐节奏自然轻微律动、自然融入场景，不能僵硬如背景板，但动作自然克制、以准确口型为核心」
+- 修复「预览 Prompt」未随模式更新：`/api/prompt-preview` 此前只传 `has_audio_ref`、漏传 `has_video_ref`（默认 True），纯音频模式下预览仍按视频模式生成（含「视频1嘴形」且约束错误）；现补传 `has_video_ref`，预览与实际提交的 prompt 一致
 
 ### 🐛 Anchor 候选审核「生成中」状态
 - 修复 Anchor 生成中点击运行记录时审核区仍显示旧图：此前 `loadAnchorReview` 一次性加载 manifest，运行中 manifest 未写入会 404 且无 catch，导致旧候选残留
