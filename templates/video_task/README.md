@@ -4,4 +4,4 @@
 
 Anchor 任务配置放在 `data/<目录名>/anchors/anchor-task.json`，生成的精选图会自动存入 `anchors/selected/` 供视频任务使用。
 
-口型模式可增加 `lyrics.txt`，或直接在任务 JSON 的 `lyrics` 字段填写歌词。日常也可直接在 Web 工作台新建任务并上传素材。
+口型模式可增加 `lyrics.txt`（放在任务目录根，与 `tasks/` 同级），或直接在任务 JSON 的 `lyrics` 字段填写歌词。日常也可直接在 Web 工作台新建任务并上传素材。

@@ -1,6 +1,6 @@
 {
-  "id": "example-anchor-task",
-  "name": "示例 Anchor 任务",
+  "id": "replace-me",
+  "name": "Replace Me",
   "description": "生成可用于视频首帧的写实人物图片",
   "negative": "不要畸形手、重复人物",
   "size": "1024x1792",
