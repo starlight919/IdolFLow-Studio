@@ -122,6 +122,17 @@ input:focus-visible,textarea:focus-visible,select:focus-visible{box-shadow:0 0 0
 .optimizer-details summary:hover{color:var(--text)}
 .optimizer-details pre{margin-top:10px;font-size:12px;max-height:320px;overflow:auto}
 
+/* ── Prompt preview wrap (视频/Anchor 预览) ── */
+.prompt-preview-wrap{margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.prompt-preview-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;color:#111}
+.prompt-preview-head .icon-btn{background:transparent;color:#111;font-size:20px;line-height:1;padding:0 6px;border:0;cursor:pointer}
+.prompt-preview-head .icon-btn:hover{color:#555}
+.prompt-preview-wrap pre{margin:0;padding:14px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;color:#111;background:#fff}
+html[data-theme="dark"] .prompt-preview-wrap{background:#1d1d1f;border-color:#3a3a3e}
+html[data-theme="dark"] .prompt-preview-head{color:#f5f5f7;border-color:#3a3a3e}
+html[data-theme="dark"] .prompt-preview-head .icon-btn{color:#f5f5f7}
+html[data-theme="dark"] .prompt-preview-wrap pre{color:#f5f5f7;background:#1d1d1f}
+
 /* ── Optimizer input toggle (你的需求) ── */
 .optimizer-toggle{margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .optimizer-toggle>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;font-size:14px;font-weight:600;color:var(--text);cursor:pointer;user-select:none;list-style:none}

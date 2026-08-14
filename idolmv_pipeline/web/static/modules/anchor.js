@@ -320,16 +320,26 @@ export function resetAnchorForm() {
 }
 
 export async function previewAnchorPrompt() {
+  const pre = $('#anchor-prompt-preview');
+  const wrap = $('#anchor-prompt-preview-wrap');
+  // 已展开 → 收起
+  if (wrap && !wrap.hidden) {
+    wrap.hidden = true;
+    return;
+  }
   try {
     const result = await post('/api/anchor-prompt-preview', anchorTaskForm());
-    const el = $('#anchor-prompt-preview');
-    if (el) {
-      el.hidden = false;
-      el.textContent = result.prompt;
-    }
+    if (pre) pre.textContent = result.prompt;
+    if (wrap) wrap.hidden = false;
+    else if (pre) pre.hidden = false;
   } catch (e) {
     toast(e.message);
   }
+}
+
+export function closeAnchorPromptPreview() {
+  const wrap = $('#anchor-prompt-preview-wrap');
+  if (wrap) wrap.hidden = true;
 }
 
 export async function requestAnchorStart() {

@@ -9,7 +9,7 @@ import { api, post, loadSettings } from './modules/api.js';
 import { $, $$, toast, escapeHtml } from './modules/utils.js';
 import {
   renderAnchorAspects, renderAnchorReferences, prepareAnchors, saveAnchorTask,
-  resetAnchorForm, previewAnchorPrompt, requestAnchorStart, uploadAnchorReference,
+  resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart, uploadAnchorReference,
   loadAnchorTasks, editAnchorTask, loadAnchorRuns, openAnchorPoll,
   regenerateAnchorBatch, anchorVote, promoteAnchor, promoteSelectedAnchors,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
@@ -25,7 +25,7 @@ import {
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
-  closeAssets, previewPrompt, requestStart, startCurrent, closeModal, confirmStart,
+  closeAssets, previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
@@ -370,11 +370,11 @@ Object.assign(window, {
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets, closeAssets,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction,
-  previewPrompt, requestStart, startCurrent, closeModal, confirmStart,
+  previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,
   // Anchor
-  renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt,
+  renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
   requestAnchorStart, uploadAnchorReference, loadAnchorTasks, editAnchorTask,
   loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
   anchorVote, promoteAnchor, promoteSelectedAnchors,

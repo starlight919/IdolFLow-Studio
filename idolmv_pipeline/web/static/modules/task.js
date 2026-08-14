@@ -558,14 +558,27 @@ export function closeAssets() {
 }
 
 export async function previewPrompt() {
+  const pre = $('#prompt-preview');
+  const wrap = $('#prompt-preview-wrap');
+  // 已展开 → 收起
+  if (wrap && !wrap.hidden) {
+    wrap.hidden = true;
+    return;
+  }
   try {
     const t = formTask();
     const result = await post('/api/prompt-preview', t);
-    $('#prompt-preview').hidden = false;
-    $('#prompt-preview').textContent = result.prompt;
+    if (pre) pre.textContent = result.prompt;
+    if (wrap) wrap.hidden = false;
+    else if (pre) pre.hidden = false;
   } catch (e) {
     toast(e.message);
   }
+}
+
+export function closePromptPreview() {
+  const wrap = $('#prompt-preview-wrap');
+  if (wrap) wrap.hidden = true;
 }
 
 // ── Run Submission ──────────────────────────────────────────────────────────
