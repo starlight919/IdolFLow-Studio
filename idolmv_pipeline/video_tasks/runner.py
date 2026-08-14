@@ -122,6 +122,10 @@ class VideoTaskRunner:
                     object.__setattr__(reference, 'audio_file_url', str(audio.resolve()))
             elif reference.pass_reference_audio and not reference.audio_file_url:
                 object.__setattr__(reference, 'audio_file_url', str(audio.resolve()))
+            # 纯口型模式（pass_reference_video=False）下 reference.file 是纯音频文件，
+            # 不做视频切片/check frame，只准备音频（上面已处理）。
+            if not reference.pass_reference_video:
+                continue
             for index, (start, duration, _, original_total, seg_pad_mode) in enumerate(segments):
                 segment = self._reference_segment(reference, index)
                 if not segment.exists():
@@ -156,6 +160,9 @@ class VideoTaskRunner:
             if not assets.get(key) or (not reused and assets.get(f"{key}__source") != _fingerprint(path)):
                 missing.append(("anchor", anchor))
         for reference in self.adapter.references:
+            # 纯口型模式不传视频，跳过 segment 视频上传
+            if not reference.pass_reference_video:
+                continue
             for index, _ in enumerate(self._segments(reference)):
                 key = self._reference_asset_key(reference, index)
                 path = self._reference_segment(reference, index)

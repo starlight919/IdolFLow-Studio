@@ -21,6 +21,7 @@ const store = {
   assetPickerRoot: '',
   assetPickerSelected: new Set(),
   folderPath: '',
+  folderPickerTarget: null,  // 'anchor' | null（null = 任务文件夹选择器）
 
   // ========== Polling ==========
   pollTimer: null,

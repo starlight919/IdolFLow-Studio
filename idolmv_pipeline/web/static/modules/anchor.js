@@ -775,6 +775,8 @@ export async function pickAnchorReferences() {
 
 export async function openInlineAnchor() {
   showView('anchors');  // defined in app module
+  // 跳转后回到 Anchor 页面顶部（避免停留在上一个视图的滚动位置）
+  scrollTo({ top: 0, behavior: 'smooth' });
   // Pre-fill the anchor data directory from the current video task form
   const taskDir = $('#task-dir')?.value.trim() || '';
   const taskName = $('#task-name')?.value.trim() || '';

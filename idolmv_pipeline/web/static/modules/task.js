@@ -11,6 +11,87 @@ export function taskFolderRelative() {
   return $('#task-dir').value.trim();
 }
 
+// ── Task Folder Empty Detection ─────────────────────────────────────────────
+// 新建/选择任务目录后，检测目录内是否已有素材（图片/视频/音频），
+// 若为空则提示用户去下方上传，或自行把文件放入任务目录。
+
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif']);
+const AV_EXTENSIONS = new Set([
+  'mp4', 'mov', 'm4v', 'webm', 'avi', 'mkv',   // 视频
+  'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg',   // 音频
+]);
+
+// 返回目录内是否已有图片 / 音视频。只下钻已知素材子目录，避免深挖 tasks/seedance 等无关目录。
+const ASSET_SUBDIR_RE = /^(anchors?|references?|audio|videos?|images?|assets?|anchor-references|selected|generated)$/i;
+
+async function _scanFolderHasAssets(rel, depth = 0) {
+  if (depth > 2) return { hasImage: false, hasAV: false };
+  const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(rel)}`);
+  const items = data.items || [];
+  let hasImage = false;
+  let hasAV = false;
+  for (const item of items) {
+    if (item.directory) {
+      if (/^anchors?$|anchor/i.test(item.name)) { hasImage = true; continue; }
+      // 仅下钻已知素材子目录，且限制深度
+      if (ASSET_SUBDIR_RE.test(item.name)) {
+        const sub = await _scanFolderHasAssets(`${rel.replace(/\/$/, '')}/${item.name}`, depth + 1);
+        hasImage = hasImage || sub.hasImage;
+        hasAV = hasAV || sub.hasAV;
+      }
+      continue;
+    }
+    const ext = (item.name.split('.').pop() || '').toLowerCase();
+    if (IMAGE_EXTENSIONS.has(ext)) hasImage = true;
+    else if (AV_EXTENSIONS.has(ext)) hasAV = true;
+  }
+  return { hasImage, hasAV };
+}
+
+export async function checkTaskFolderEmpty() {
+  const tip = $('#empty-folder-tip');
+  const needDirTip = $('#need-dir-tip');
+  const rel = taskFolderRelative();
+  updateUploadState();
+  if (!rel) {
+    // 未确定任务文件夹：提示先建立，而非「缺少素材」
+    if (tip) tip.hidden = true;
+    if (needDirTip) needDirTip.hidden = false;
+    return;
+  }
+  if (needDirTip) needDirTip.hidden = true;
+  if (!tip) return;
+  try {
+    const { hasImage, hasAV } = await _scanFolderHasAssets(rel);
+    const missingImage = !hasImage;
+    const missingAV = !hasAV;
+    console.log('[checkTaskFolderEmpty]', { rel, hasImage, hasAV, missingImage, missingAV });
+    // 两类素材都齐 → 隐藏提示
+    if (!missingImage && !missingAV) { tip.hidden = true; return; }
+
+    $$('.empty-folder-path').forEach((el) => { el.textContent = `data_root / ${rel}`; });
+
+    const imgLine = $('#empty-folder-img');
+    const avLine = $('#empty-folder-av');
+    if (imgLine) imgLine.style.display = missingImage ? '' : 'none';
+    if (avLine) avLine.style.display = missingAV ? '' : 'none';
+
+    tip.hidden = false;
+  } catch {
+    // 目录不存在或列取失败时，不打扰用户
+    tip.hidden = true;
+  }
+}
+
+// 上传素材前，若未确定任务文件夹，禁用上传。
+export function updateUploadState() {
+  const hasDir = !!taskFolderRelative();
+  const uploadBtn = $('#upload-btn');
+  const uploadFile = $('#upload-file');
+  if (uploadBtn) uploadBtn.disabled = !hasDir;
+  if (uploadFile) uploadFile.disabled = !hasDir;
+}
+
 // ── Preview Helpers ─────────────────────────────────────────────────────────
 
 function previewPath(file) {
@@ -22,7 +103,11 @@ function previewPath(file) {
 export function renderAssetChips(field) {
   const container = $(`.asset-chips[data-field="${field}"]`);
   if (!container) return;
-  const files = lines(`#${field}`);
+  // references 字段需根据当前 tab 区分视频(#references)还是音频(#audio-refs)
+  const isAudioTab = field === 'references'
+    && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+  const sourceField = isAudioTab ? 'audio-refs' : field;
+  const files = lines(`#${sourceField}`);
   if (!files.length) {
     container.innerHTML = '';
     return;
@@ -37,7 +122,9 @@ export function renderVideoAssetPreviews() {
   renderAssetChips('anchors');
   renderAssetChips('references');
   const anchorFiles = lines('#anchors');
-  const referenceFiles = lines('#references');
+  // 根据当前 ref-tab 决定读视频字段还是音频字段
+  const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+  const referenceFiles = isAudioTab ? lines('#audio-refs') : lines('#references');
 
   const anchorEl = $('#anchor-file-previews');
   if (anchorEl) {
@@ -52,16 +139,21 @@ export function renderVideoAssetPreviews() {
       ? referenceFiles.map((file) => {
           const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file);
           const media = isAudio
-            ? `<audio src="${previewPath(file)}" controls preload="metadata"></audio>`
+            ? `<div class="asset-audio-icon">♪</div>`
             : `<video src="${previewPath(file)}#t=0.1" preload="metadata" muted onerror="console.error('Failed to load:',this.src)"></video>`;
-          return `<figure class="asset-figure">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
+          return `<figure class="asset-figure${isAudio ? ' asset-audio' : ''}">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
         }).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
 }
 
 export function removeVideoAsset(type, file) {
-  const target = type === 'anchors' ? '#anchors' : '#references';
+  let target = type === 'anchors' ? '#anchors' : '#references';
+  // references 在音频 tab 下操作 #audio-refs
+  if (type === 'references') {
+    const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+    if (isAudioTab) target = '#audio-refs';
+  }
   const el = $(target);
   if (!el) return;
   const current = el.value.split('\n').map((v) => v.trim()).filter(Boolean);
@@ -74,12 +166,16 @@ export function removeVideoAsset(type, file) {
 export async function openAssetPicker(category) {
   store.assetPickerCategory = category;
   store.assetPickerRoot = taskFolderRelative();
-  // anchors 默认进 anchors/selected（候选 anchor 所在目录）；
+  // 统一约定：anchors 默认进 anchors/（上传/手动放的 Anchor 图片都在这里），
   // references 默认进 references/（上传的参考音视频所在目录）。
+  // 若子目录不存在，browseAssets 会自动回退到任务根目录。
   store.assetPickerPath = category === 'anchors'
-    ? `${store.assetPickerRoot.replace(/\/$/, '')}/anchors/selected`
+    ? `${store.assetPickerRoot.replace(/\/$/, '')}/anchors`
     : `${store.assetPickerRoot.replace(/\/$/, '')}/references`;
-  store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : '#references'));
+  // 已选中项：references 在音频 tab 下读 #audio-refs
+  const isAudioTab = category === 'references'
+    && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+  store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references')));
   $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考音视频';
   $('#asset-picker-modal').hidden = false;
   await browseAssets(store.assetPickerPath);
@@ -91,7 +187,23 @@ export function closeAssetPicker() {
 
 export async function browseAssets(path) {
   try {
-    const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(path)}`);
+    let data;
+    // 逐级向上回退：默认子目录（anchors/selected、references/）不存在时，
+    // 自动回退到父目录乃至任务根目录，让用户能看到直接放在根目录下的素材。
+    let cur = path;
+    while (true) {
+      try {
+        data = await api(`/api/files?root=data_root&path=${encodeURIComponent(cur)}`);
+        break;
+      } catch (e) {
+        const parent = String(cur).split('/').slice(0, -1).join('/');
+        if (parent && parent !== cur) {
+          cur = parent;
+        } else {
+          throw e;
+        }
+      }
+    }
     store.assetPickerPath = data.path === '.' ? '' : data.path;
     $('#asset-picker-path').textContent = `data_root / ${store.assetPickerPath}`;
 
@@ -103,6 +215,13 @@ export async function browseAssets(path) {
         ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i.test(item.name)
         : /\.(png|jpe?g|webp)$/i.test(item.name);
 
+    // 参考音视频模式下，隐藏 anchor 图片相关目录（anchors/ anchor-references/ 等），
+    // 避免用户在选音视频时误入图片目录。
+    const allowedDir = (item) =>
+      store.assetPickerCategory === 'references'
+        ? !/^anchors?$|anchor/i.test(item.name)
+        : true;
+
     const list = $('#asset-picker-list');
     list.innerHTML =
       (store.assetPickerPath
@@ -111,7 +230,9 @@ export async function browseAssets(path) {
       data.items
         .map((item) =>
           item.directory
-            ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
+            ? (allowedDir(item)
+                ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
+                : '')
             : allowed(item)
               ? `<label class="file-option"><span>${escapeHtml(item.name)}</span><input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
               : ''
@@ -151,7 +272,20 @@ export function confirmAssetSelection() {
     return;
   }
 
-  const target = store.assetPickerCategory === 'anchors' ? '#anchors' : '#references';
+  let target = store.assetPickerCategory === 'anchors' ? '#anchors' : '#references';
+  // 参考音视频：根据选中文件类型自动判断 tab —— 全音频则切音频 tab，
+  // 含视频则切视频 tab（视频 tab 为主输入）。
+  if (store.assetPickerCategory === 'references') {
+    const selected = [...store.assetPickerSelected];
+    const hasVideo = selected.some((f) => /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(f));
+    if (hasVideo) {
+      switchRefTab('video');
+      target = '#references';
+    } else {
+      switchRefTab('audio');
+      target = '#audio-refs';
+    }
+  }
   $(target).value = [...store.assetPickerSelected].join('\n');
   renderVideoAssetPreviews();
   closeAssetPicker();
@@ -161,6 +295,7 @@ export function confirmAssetSelection() {
 
 export function openFolderPicker() {
   store.folderPath = '';
+  store.folderPickerTarget = null;  // 任务文件夹选择器（区别于现场生成的 anchor 目录选择器）
   $('#folder-modal').hidden = false;
   browseFolder('');
 }
@@ -205,9 +340,32 @@ export async function createFolder() {
 export async function chooseFolder() {
   const target = store.folderPickerTarget;
   const inputId = target === 'anchor' ? '#anchor-id' : '#task-dir';
-  $(inputId).value = store.folderPath || '';
+  const newPath = store.folderPath || '';
+  const oldPath = $(inputId).value.trim();
+
+  // 切换任务文件夹时，若已选素材（anchor/音视频）属于旧目录，需清空并提醒确认
+  if (inputId === '#task-dir' && newPath !== oldPath) {
+    const hasSelected = [lines('#anchors'), lines('#references'), lines('#audio-refs')].some((a) => a.length > 0);
+    if (hasSelected) {
+      const ok = confirm(`切换任务文件夹将清空已选的 Anchor 图片和参考音视频。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」\n\n是否继续？`);
+      if (!ok) {
+        store.folderPickerTarget = null;
+        closeFolderPicker();
+        return;  // 用户取消，保持原目录和已选素材不变
+      }
+    }
+    // 清空上一个文件夹残留的素材
+    $('#anchors').value = '';
+    $('#references').value = '';
+    $('#audio-refs').value = '';
+    renderVideoAssetPreviews();
+  }
+
+  $(inputId).value = newPath;
   store.folderPickerTarget = null;
   closeFolderPicker();
+  // 选择的是任务文件夹时，检测目录内是否已有素材
+  if (inputId === '#task-dir') checkTaskFolderEmpty();
 }
 
 export function taskFolderName() {
@@ -266,26 +424,24 @@ export function formTask() {
 }
 
 export function switchRefTab(tab) {
-  const videoTA = $('#references');
   const audioTA = $('#audio-refs');
   const padRow = $('.pad-mode-row');
   const passAudioWrap = $('#pass-audio-wrap');
   const mode = $('[name=mode]:checked')?.value;
-  if (!videoTA || !audioTA) return;
+  // #references 与 #audio-refs 均为隐藏数据载体（不直接显示裸文本框），
+  // 选中文件的展示统一走 chips / previews，随 tab 切换重渲染。
+  if (audioTA) audioTA.hidden = true;
   if (tab === 'video') {
-    videoTA.hidden = false;
-    audioTA.hidden = true;
     if (padRow) padRow.style.display = '';
     // motion 模式不显示"传参考音频"
     if (passAudioWrap) passAudioWrap.style.display = mode === 'motion' ? 'none' : '';
   } else {
-    videoTA.hidden = true;
-    audioTA.hidden = false;
     // 音频 tab：隐藏时长对齐 + "传参考音频"（选音频 tab 就是要传音频）
     if (padRow) padRow.style.display = 'none';
     if (passAudioWrap) passAudioWrap.style.display = 'none';
   }
   $$('.ref-tab[data-ref-tab]').forEach(b => b.classList.toggle('active', b.dataset.refTab === tab));
+  renderVideoAssetPreviews();
 }
 
 export function updateMode() {
@@ -484,10 +640,18 @@ export function editTask(id) {
   };
   $('#candidates').value = t.candidates;
   $('#anchors').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
-  $('#references').value = t.references.map((x) => stripDirPrefix(x.file)).join('\n');
-  // 默认切到视频 tab（对口型任务视频是主输入；纯音频任务除外）
+  // 参考音视频：纯音频任务（pass_reference_video=false）写入音频字段，否则写入视频字段
   const isAudioOnly = t.references?.length > 0 && t.references.every(r => r.pass_reference_video === false);
-  if (!isAudioOnly) switchRefTab('video');
+  const refFiles = t.references.map((x) => stripDirPrefix(x.file));
+  if (isAudioOnly) {
+    $('#references').value = '';
+    $('#audio-refs').value = refFiles.join('\n');
+    switchRefTab('audio');
+  } else {
+    $('#references').value = refFiles.join('\n');
+    $('#audio-refs').value = '';
+    switchRefTab('video');
+  }
   const passAudio = t.references[0]?.pass_reference_audio;
   const passAudioEl = document.getElementById('pass-reference-audio');
   if (passAudioEl) passAudioEl.checked = passAudio !== false;
@@ -505,6 +669,7 @@ export function editTask(id) {
   $$('.mode').forEach((m) => m.classList.toggle('active', m.contains(radio)));
   updateMode();
   renderVideoAssetPreviews();
+  checkTaskFolderEmpty();
   scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -681,6 +846,7 @@ export async function uploadAsset() {
       }
       if (statusEl) statusEl.textContent = '完成';
       renderVideoAssetPreviews();
+      checkTaskFolderEmpty();
       toast('上传完成');
       // 清空文件选择框，便于连续上传；几秒后自动清空状态
       const fileInput = $('#upload-file');

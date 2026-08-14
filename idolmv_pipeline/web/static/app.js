@@ -21,7 +21,7 @@ import {
   // Review
 } from './modules/anchor.js';
 import {
-  taskFolderRelative, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
+  taskFolderRelative, checkTaskFolderEmpty, updateUploadState, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
@@ -404,6 +404,10 @@ async function init() {
   if (anchorForm) anchorForm.addEventListener('submit', (e) => saveAnchorTask(e));
   const openTsBtn = $('#open-lyrics-timestamps');
   if (openTsBtn) openTsBtn.addEventListener('click', openLyricsTimestampsEditor);
+  // 任务文件夹变化时检测目录内是否已有素材（含手动输入路径），并更新上传区状态
+  $('#task-dir')?.addEventListener('change', () => { updateUploadState(); checkTaskFolderEmpty(); });
+  updateUploadState();
+  checkTaskFolderEmpty();
   $('#close-lyrics-timestamps')?.addEventListener('click', closeLyricsTimestampsEditor);
   $('#lyrics-timestamps-modal')?.addEventListener('click', (e) => {
     if (e.target === $('#lyrics-timestamps-modal')) closeLyricsTimestampsEditor();
