@@ -62,18 +62,19 @@ echo "🚀 启动 IdolFlow Studio (后台模式)..."
 echo ""
 
 # 解析端口（优先级：--port 参数 > .env 的 VIDEO_WEB_PORT > 默认 8913）
-# 先保存原始参数，解析端口用副本，启动时仍用完整参数
-ORIG_ARGS=("$@")
 WEB_PORT="${VIDEO_WEB_PORT:-8913}"
-for ((i = 0; i < ${#ORIG_ARGS[@]}; i++)); do
-  case "${ORIG_ARGS[$i]}" in
-    --port) [[ -n "${ORIG_ARGS[$i+1]:-}" ]] && WEB_PORT="${ORIG_ARGS[$i+1]}" ;;
-    --port=*) WEB_PORT="${ORIG_ARGS[$i]#--port=}" ;;
+prev=""
+for arg in "$@"; do
+  case "$arg" in
+    --port) prev="--port" ;;
+    --port=*) WEB_PORT="${arg#--port=}" ;;
+    *) [[ "$prev" == "--port" ]] && WEB_PORT="$arg" ;;
   esac
+  prev="$arg"
 done
 
-# 后台运行
-nohup python3 "$ROOT/run.py" video web --config "$ROOT/video-workspace.json" "${ORIG_ARGS[@]}" \
+# 后台运行（$@ 保持原样透传给 run.py）
+nohup python3 "$ROOT/run.py" video web --config "$ROOT/video-workspace.json" "$@" \
   > "$LOG_FILE" 2>&1 &
 
 # 保存 PID

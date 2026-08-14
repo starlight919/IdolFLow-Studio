@@ -22,7 +22,7 @@ const AV_EXTENSIONS = new Set([
 ]);
 
 // 返回目录内是否已有图片 / 音视频。只下钻已知素材子目录，避免深挖 tasks/seedance 等无关目录。
-const ASSET_SUBDIR_RE = /^(anchors?|references?|audio|videos?|images?|assets?|anchor-references|selected|generated)$/i;
+const ASSET_SUBDIR_RE = /^(anchors?|references?|audio|videos?|images?|assets?|anchor-references|generated)$/i;
 
 async function _scanFolderHasAssets(rel, depth = 0) {
   if (depth > 2) return { hasImage: false, hasAV: false };
@@ -153,7 +153,7 @@ export function renderVideoAssetPreviews() {
   const anchorEl = $('#anchor-file-previews');
   if (anchorEl) {
     anchorEl.innerHTML = anchorFiles.length
-      ? anchorFiles.map((file) => `<figure class="asset-figure"><img src="${previewPath(file)}" loading="lazy" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22%3E✗%3C/text%3E%3C/svg%3E'"><button type="button" class="asset-remove" data-type="anchors" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`).join('')
+      ? anchorFiles.map((file) => `<figure class="asset-figure" data-file="${escapeAttr(file)}"><img src="${previewPath(file)}" loading="eager" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22%3E✗%3C/text%3E%3C/svg%3E'"><button type="button" class="asset-remove" data-type="anchors" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
 
@@ -165,7 +165,7 @@ export function renderVideoAssetPreviews() {
           const media = isAudio
             ? `<div class="asset-audio-icon">♪</div>`
             : `<video src="${previewPath(file)}#t=0.1" preload="metadata" muted onerror="console.error('Failed to load:',this.src)"></video>`;
-          return `<figure class="asset-figure${isAudio ? ' asset-audio' : ''}">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
+          return `<figure class="asset-figure${isAudio ? ' asset-audio' : ''}" data-file="${escapeAttr(file)}">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
         }).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
@@ -192,8 +192,8 @@ export async function openAssetPicker(category) {
   store.assetPickerRoot = taskFolderRelative();
   const root = store.assetPickerRoot.replace(/\/$/, '');
   // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）：
-  // - Anchor 图片：集中在 anchors/，默认直接进 anchors/，少点一层；
-  // - 参考音视频：统一在 references/，默认直接进 references/，不混图片、不混内部目录。
+  // - Anchor 图片：上传与「设为 Anchor」的图都统一在 anchors/ 根目录，默认直接进去；
+  // - 参考音视频：统一在 references/，不混图片、不混内部目录。
   // 若默认目录不存在，browseAssets 会自动逐级回退到任务根目录。
   store.assetPickerPath = `${root}/${category === 'anchors' ? 'anchors' : 'references'}`;
   // 已选中项：references 在音频 tab 下读 #audio-refs
@@ -212,7 +212,7 @@ export function closeAssetPicker() {
 export async function browseAssets(path) {
   try {
     let data;
-    // 逐级向上回退：默认子目录（anchors/selected、references/）不存在时，
+    // 逐级向上回退：默认子目录（anchors/、references/）不存在时，
     // 自动回退到父目录乃至任务根目录，让用户能看到直接放在根目录下的素材。
     let cur = path;
     while (true) {
@@ -264,12 +264,29 @@ export async function browseAssets(path) {
       }
     }
 
+    // 现场生成候选引导：只要存在 generated/ 目录就提示，方便用户同时看到「现场生成的候选」和「自己上传的图」。
+    let generatedHint = '';
+    if (store.assetPickerCategory === 'anchors') {
+      const generatedDir = data.items.find((item) => item.directory && item.name === 'generated');
+      if (generatedDir) {
+        const hint = currentFiles.length === 0
+          ? '🎬 现场生成的候选在 generated/ 里（尚未设为 Anchor）'
+          : '💡 generated/ 里还有现场生成的候选，需要的话也可进入选取';
+        generatedHint = `<button class="asset-generated-hint" onclick="browseAssets('${escapeAttr(generatedDir.path)}')"><span>${hint}</span><span>进入 ›</span></button>`;
+      } else if (/\/generated(\/|$)/.test(store.assetPickerPath)) {
+        generatedHint = `<div class="asset-generated-tip">这些是现场生成的候选。若要固定到正式目录（anchors/ 根目录），请在 Anchor 审核页「设为 Anchor」。</div>`;
+      }
+    }
+
     const list = $('#asset-picker-list');
+    const visibleItems = data.items.filter((item) => (item.directory ? allowedDir(item) : allowed(item)));
+    const hasVisibleDirs = data.items.some((item) => item.directory && allowedDir(item));
     list.innerHTML =
       (store.assetPickerPath
         ? `<button onclick="browseAssets('${escapeAttr(parent)}')"><span>上一级</span><span>..</span></button>`
         : '') +
       rootHint +
+      generatedHint +
       data.items
         .map((item) =>
           item.directory
@@ -277,10 +294,16 @@ export async function browseAssets(path) {
                 ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
                 : '')
             : allowed(item)
-              ? `<label class="file-option"><span>${escapeHtml(item.name)}</span><input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
+              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span>${escapeHtml(item.name)}</span><input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
               : ''
         )
-        .join('');
+        .join('') +
+      // 空状态提示：当前目录（及其可见子目录）都没有可选文件
+      (visibleItems.length === 0 && !hasVisibleDirs
+        ? (store.assetPickerCategory === 'anchor-references'
+            ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<br>可以用「本机上传」从本机上传，或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<数据目录>/anchors/anchor-references')}</code></div>`
+            : `<div class="asset-empty-tip">📂 当前目录没有可选素材。</div>`)
+        : '');
   } catch (e) {
     toast(e.message);
   }
@@ -299,9 +322,15 @@ export function confirmAssetSelection() {
     // Import from anchor module dynamically to avoid circular deps
     import('./anchor.js').then(({ renderAnchorReferences, syncAspectSourceDropdowns }) => {
       [...store.assetPickerSelected].forEach((file) => {
+        // 参考图 file 需相对 anchors/ 子目录（与上传、后端 _reference_source 解析一致）。
+        // picker 的 assetPickerRoot 指向 .../anchors/anchor-references/，relative 截断后只剩
+        // 纯文件名（如 IMG.jpg），需补回 anchor-references/ 前缀；含 / 的完整路径保持原样。
+        const refFile = store.assetPickerCategory === 'anchor-references' && !file.includes('/')
+          ? `anchor-references/${file}`
+          : file;
         store.anchorReferences.push({
           id: `ref-${store.anchorReferences.length + 1}`,
-          file,
+          file: refFile,
           bindings: [],  // No auto-binding — user selects source per aspect in step 3
           note: '',
           remove_watermark: false,
@@ -486,11 +515,38 @@ export async function chooseFolder() {
     renderVideoAssetPreviews();
   }
 
+  // 切换 Anchor 数据目录时，清空上一个目录残留的参考图（与任务文件夹清空逻辑一致）
+  let anchorMod = null;
+  if (inputId === '#anchor-id' && newPath !== oldPath) {
+    const hasRefs = store.anchorReferences.length > 0;
+    if (hasRefs) {
+      const ok = await window.showDeleteConfirm({
+        title: '切换数据目录',
+        desc: `切换将清空已选的参考图片。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」`,
+        showFileOption: false,
+        confirmText: '确认切换',
+        danger: false,
+      });
+      if (!ok) {
+        store.folderPickerTarget = null;
+        closeFolderPicker();
+        return;  // 用户取消，保持原目录和已选参考图不变
+      }
+    }
+    store.anchorReferences = [];
+    store.currentAnchorTask = null;
+    anchorMod = await import('./anchor.js');
+    anchorMod.syncAspectSourceDropdowns();
+    anchorMod.renderAnchorReferences();
+  }
+
   $(inputId).value = newPath;
   store.folderPickerTarget = null;
   closeFolderPicker();
   // 选择的是任务文件夹时，检测目录内是否已有素材
   if (inputId === '#task-dir') checkTaskFolderEmpty();
+  // 选择的是 Anchor 数据目录时，检查目录内是否已有参考图
+  if (inputId === '#anchor-id') anchorMod?.checkAnchorRefDir?.();
 }
 
 export function taskFolderName() {
@@ -621,7 +677,13 @@ export function markAsManuallyEdited(input) {
 
 export async function saveTask(event, mode = 'auto') {
   event?.preventDefault();
-  const data = formTask();
+  let data;
+  try {
+    data = formTask();
+  } catch (e) {
+    toast(e.message);
+    return null;
+  }
   const newId = `${data.data_dir}__${data.name}`;
   const editingId = store.currentTask?.id;
 
@@ -637,18 +699,23 @@ export async function saveTask(event, mode = 'auto') {
     }
   }
 
-  const task = await _doSave(data, editingId, mode);
-  store.currentTask = task;
-  toast('任务已保存');
-  await loadTasks();
-  return task;
+  try {
+    const task = await _doSave(data, editingId, mode);
+    store.currentTask = task;
+    toast('任务已保存');
+    await loadTasks();
+    return task;
+  } catch (e) {
+    toast(e.message);
+    return null;
+  }
 }
 
 async function _doSave(data, editingId, mode) {
   const newId = `${data.data_dir}__${data.name}`;
   // mode=update 且 id 变了（改名/改文件夹）：先删旧任务，再保存新任务
   if (mode === 'update' && editingId && editingId !== newId) {
-    await api(`/api/tasks/${encodeURIComponent(editingId)}`, 'DELETE');
+    await api(`/api/tasks/${encodeURIComponent(editingId)}`, { method: 'DELETE' });
   }
   // 检查同名任务是否存在（同名更新除外）
   const existing = store.tasks?.find(t => t.id === newId);
@@ -782,14 +849,73 @@ export function editTask(id) {
   updateMode();
   renderVideoAssetPreviews();
   checkTaskFolderEmpty();
-  scrollTo({ top: 0, behavior: 'smooth' });
+  checkMissingAssets(id);
+  setTaskResetBtnLabel();
+  // 编辑后滚动到「素材」区，让用户直接看到已选素材与现场生成候选提示
+  const materialsPanel = $('#task-materials-panel');
+  if (materialsPanel) materialsPanel.scrollIntoView({ block: 'start', behavior: 'auto' });
+  else scrollTo({ top: 0, behavior: 'auto' });
+}
+
+// 检测任务引用的文件是否已被删除/不存在，给出明确提示
+export async function checkMissingAssets(taskId) {
+  const banner = $('#missing-assets-banner');
+  if (!banner) return;
+  if (!taskId) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  try {
+    const result = await api(`/api/tasks/${encodeURIComponent(taskId)}/missing-assets`);
+    const missing = [...(result.missing_anchors || []), ...(result.missing_references || [])];
+    if (!missing.length) {
+      banner.hidden = true;
+      banner.innerHTML = '';
+      return;
+    }
+    const names = missing.map((m) => m.file.split('/').pop()).join('、');
+    banner.hidden = false;
+    banner.innerHTML = `⚠️ 以下文件已不存在：<strong>${escapeHtml(names)}</strong>。请在素材区移除或重新选择，否则保存/生成会失败。`;
+    // 标记预览区对应文件
+    markMissingPreviews(missing.map((m) => m.file));
+  } catch (e) {
+    banner.hidden = true;
+  }
+}
+
+function markMissingPreviews(missingFiles) {
+  const set = new Set(missingFiles);
+  $$('.asset-figure').forEach((fig) => {
+    const file = fig.dataset.file;
+    if (file && set.has(file)) {
+      fig.classList.add('missing');
+      const cap = fig.querySelector('figcaption');
+      if (cap) cap.textContent = cap.textContent.replace(/（文件已不存在）$/, '') + '（文件已不存在）';
+    }
+  });
 }
 
 export function resetForm() {
   $('#task-form').reset();
+  // 显式清空素材字段（form.reset 对 hidden input 的清空在部分场景下不可靠）
+  $('#anchors').value = '';
+  $('#references').value = '';
+  $('#audio-refs').value = '';
   store.currentTask = null;
+  store.pendingLyricsTimestamps = null;
   $$('.mode').forEach((m, i) => m.classList.toggle('active', i === 0));
   updateMode();
+  renderVideoAssetPreviews();
+  checkMissingAssets('');
+  checkTaskFolderEmpty();
+  setTaskResetBtnLabel();
+}
+
+// 编辑态显示「取消」，非编辑态显示「新任务」
+export function setTaskResetBtnLabel() {
+  const btn = $('#task-reset-btn');
+  if (btn) btn.textContent = store.currentTask ? '取消' : '新任务';
 }
 
 export async function showAssets(id) {
@@ -809,15 +935,18 @@ export async function showAssets(id) {
     panel.className = 'panel asset-panel-inline';
     panel.innerHTML = `
       <div class="section-head"><h3>Asset 清单</h3></div>
+      <div class="asset-hint">素材通过<b>文件指纹</b>自动复用：源文件内容未变时<b>跳过上传</b>、直接复用已上传的 Seedance 资源，无需手动清理。仅在需要<b>强制重新上传</b>某个素材时才点 🗑 删除对应缓存。</div>
       <div class="asset-list">${data.items.length
         ? data.items
-            .map(
-              (item) => `<div class="asset-row">
+            .map((item) => {
+              const srcName = item.source && item.source.path ? item.source.path.split('/').pop() : '';
+              const type = item.key.startsWith('anchor_') ? 'Anchor 图片' : item.key.endsWith(':audio') ? '参考音频' : '参考视频';
+              return `<div class="asset-row">
                 <div><strong>${escapeHtml(item.key)}</strong><div class="meta">${escapeHtml(item.asset_id)}</div></div>
-                <div class="meta">${item.source ? `${escapeHtml(item.source.path)} · ${formatBytes(item.source.size)}` : '无源文件指纹'}</div>
-                <button class="text-button danger-text" onclick="clearTaskAssets('${escapeAttr(id)}','${escapeAttr(item.key)}')" title="清除此素材缓存">🗑</button>
-              </div>`
-            )
+                <div class="meta">${escapeHtml(type)} · ${item.source ? `${escapeHtml(srcName || item.source.path)} · ${formatBytes(item.source.size)}` : '无源文件指纹'}</div>
+                <button class="text-button danger-text" onclick="clearTaskAssets('${escapeAttr(id)}','${escapeAttr(item.key)}')" title="清除此素材缓存，下次运行会重新上传">🗑</button>
+              </div>`;
+            })
             .join('')
         : '<p class="hint">尚无已上传 Asset；首次运行时会按需创建。</p>'}</div>
       <div class="actions"><button class="secondary" onclick="clearTaskAssets('${escapeAttr(id)}')">清除全部缓存</button></div>`;
@@ -949,12 +1078,16 @@ export async function uploadAsset() {
   xhr.onload = () => {
     let errorMsg = null;
     if (xhr.status < 300) {
+      // 后端返回的实际相对路径（例如 anchors/<filename>），优先使用，避免前后端路径不一致
+      let uploadedFile = null;
+      try { uploadedFile = JSON.parse(xhr.responseText).file; } catch { uploadedFile = null; }
+      if (!uploadedFile) uploadedFile = `${category}/${file.name}`;
       // 根据当前 tab 决定写入视频字段还是音频字段
       const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
       const target = category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references');
       const el = $(target);
       if (el) {
-        el.value += `${el.value ? '\n' : ''}${category}/${file.name}`;
+        el.value += `${el.value ? '\n' : ''}${uploadedFile}`;
       }
       if (statusEl) statusEl.textContent = '完成';
       renderVideoAssetPreviews();

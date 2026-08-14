@@ -2,6 +2,44 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-14] - Anchor 页面与逻辑完善
+
+### 🖥 Anchor 前端
+- 参考图「补充描述」由 `onchange` 改为 `oninput` 实时保存，切换数据目录或新增图片不再丢失输入
+- 参考图操作按钮移至列表顶部：「从数据目录选择」+「本机上传」，并显示已添加张数；参考图改为多列自适应网格，布局更紧凑
+- 切换数据目录时清空已选参考图（弹窗确认，取消则保持不变），并同步重置参考点来源下拉框、检测新目录内已有图片
+- 画质/风格、禁止项快捷标签修复：编辑任务回填后再保存不会重复累积标签文本；点击标签会实时把「选中标签 + 手动描述」合并显示到备注框，手动描述与标签互不覆盖
+- 审核页移除「推荐 / 不推荐」投票，仅保留「下载」「设为 Anchor」与工具栏「按当前配置再生成一批」
+- 「设为 Anchor」支持取消：已设为 Anchor 的候选可点击「取消 Anchor」撤销，并自动删除 `anchors/` 中已复制的图片
+- 修复「从数据目录选择」参考图列表不加载：`pickAnchorReferences` 打开文件选择弹窗后漏调用 `browseAssets`，现补上，进入 `anchors/anchor-references/` 后能列出该目录已有的参考图
+- 修复从数据目录选择的参考图保存时路径丢失 `anchor-references/` 前缀：picker 按 `anchors/anchor-references/` 截断后只剩纯文件名，现统一补回前缀，与上传、后端 `_reference_source` 解析一致（`file` 统一为相对 `anchors/` 的 `anchor-references/<name>`）
+- 参考图选择弹窗为每张图显示缩略图预览（此前仅视频任务的 Anchor 图片有缩略图，参考图缺失），预览路径改为用相对 `data_root` 的完整路径，避免与视频任务目录前缀混用
+- 修复切换数据目录后参考图缩略图残留：手动在输入框改目录（`oninput`）此前只更新提示条、不清空已选参考图，现引入 `store._anchorDir` 检测目录变化并清空旧参考图；编辑回填、保存、从视频任务跳转等设置目录处同步 `_anchorDir`，避免误清空刚加载的参考图
+
+### 🐛 后端与进度
+- Anchor 运行进度对齐视频任务：提交（submitting）阶段不再把进度条拉满，仅生成（generating）/完成阶段推进整体进度
+- 修复提交失败时 `Cannot read properties of undefined (reading 'id')`：保存失败时不再继续弹提交密码框
+- 修复 Anchor 运行「恢复轮询」失效：`_resume_from_state` 构造 runner 与 `_resume_run` 调用 `resume` 的参数签名不匹配，导致服务重启后无法继续轮询
+- 修复视频任务「恢复轮询」失效：`resume` 分支此前被误放在 GET handler 中，POST `/api/runs/<id>/resume` 直接 404，现移回 POST handler
+- 恢复轮询不再依赖 Anchor 图片：resume 仅继续轮询已提交的候选（凭 task_id 下载），无需重新提交，因此只校验 references 音视频、不再校验 anchors 图片
+- 移除 Anchor 审核的 `vote` 动作端点，`promote`（设为 Anchor）保持不变
+- 「取消 Anchor」增加引用校验：图片被视频任务引用时拒绝删除（返回 409），避免误删视频任务依赖的 Anchor 图
+- 编辑视频任务时检测素材缺失：后端新增 `GET /api/tasks/<id>/missing-assets`，前端编辑任务时对已删除的 Anchor/参考音视频给出明确警告条与「文件已不存在」标记；asset 缓存保留，文件重新选回后可复用无需重传
+- 视频任务「选择 Anchor 图片」默认定位到 `anchors/`（与上传、设为 Anchor 同目录），且文件列表为每张图片显示缩略图预览
+- 统一 Anchor 图片落点：上传的 Anchor 图与「设为 Anchor」的图都直接落到 `anchors/` 根目录（取消 `anchors/selected/` 子目录），选图、预览、取消 Anchor 均按 `anchors/<filename>` 解析
+- 选图引导现场生成候选：Anchor 图片 picker 检测到 `generated/` 目录时，提示「现场生成的候选在 generated/ 里（尚未设为 Anchor）」，进入后说明如何「设为 Anchor」固定到正式目录
+- 编辑已保存任务时，顶部「新任务」按钮动态切换为「取消」（放弃修改并清空表单）；Anchor 与视频任务一致
+- 上传素材改为采用后端返回的实际相对路径，避免前端自行拼接路径与后端不一致
+- 视频候选下载文件名带上「数据目录__任务名」前缀并保留中文，方便区分不同目录下同名任务的候选
+- Asset 清单改为显示源文件名（而非完整绝对路径），让 asset key 能对应到具体素材文件
+- 保存任务放宽校验：保存草稿时不再强制要求歌词/完整素材（`strict=False`），仅生成时才严格校验；填了任务名和文件夹即可保存
+- 修复编辑改名后「更新任务」报 `RequestInit` 类型错误：删除旧任务的 `api(url, 'DELETE')` 误传字符串，改为 `{ method: 'DELETE' }`
+- 修复「取消/新任务」后素材残留：显式清空 anchor/音视频字段并重新渲染预览，清空歌词时间戳，取消后显示「请先选择任务文件夹」提示
+- 编辑任务后滚动到「素材」区，编辑回顶由平滑滚动改为瞬间跳转、缩略图立即加载，修复滚动黑屏卡顿
+- 防御任务 id 双重前缀：`list()` 读取 task.json 时若 `id` 已含 `data_dir__` 前缀则剥离后再拼接，避免历史脏数据产生 `曾曾__曾曾__跳舞` 这类重复前缀
+- Asset 清单增加说明：顶部提示「文件指纹自动复用，源文件未变则跳过上传」，每个条目标注素材类型（Anchor 图片/参考视频/参考音频）
+- Anchor 生成器选择数据目录后，检测并**分别提示**已有 Anchor 图：「已有 N 张正式 Anchor 图（anchors/ 根目录，可直接在视频任务里使用）」与「另有 M 张生成候选图（generated/，需「设为 Anchor」后固定到正式目录）」，不再把手动上传的正式图与生成候选图混称「已生成」
+
 ## [2026-08-14] - 健壮性与体验修复
 
 ### 🐛 后端修复
@@ -280,7 +318,7 @@
 - **之前**：Anchor 任务独立存储在 `data/anchor-xxx/` 目录，与 Video 任务无关联
 - **现在**：Anchor 任务归属于数据目录，存储在 `data/<目录>/anchors/anchor-task.json`
 - Anchor task_id = 数据目录名（如 `马路风`）
-- 生成的候选图和精选图都在同目录下，Video 任务可直接引用
+- 生成的候选图和正式图都在同目录下，Video 任务可直接引用
 
 #### 统一的目录结构
 ```
@@ -289,7 +327,7 @@ data/<数据目录>/
 │   ├── anchor-task.json         ← Anchor 任务配置
 │   ├── anchor-references/       ← 参考图片
 │   ├── generated/<run_id>/      ← 生成候选
-│   └── selected/                ← promote 后的精选图（Video 任务从这里选）
+│   └── *.jpg                    ← 上传 / promote 后的正式图（Video 任务从这里选）
 ├── tasks/                       ← Video 任务配置（可有多个）
 │   ├── 唱歌版.json
 │   └── 跳舞版.json
@@ -299,7 +337,7 @@ data/<数据目录>/
 
 #### promote 流程简化
 - **之前**：promote 时需要手动指定 `video_task_id`，跨目录拷贝图片，调用 `append_anchor` 修改视频任务
-- **现在**：promote 只需拷贝到 `data/<目录>/anchors/selected/`，Video 任务通过 asset picker 直接从该目录选图
+- **现在**：promote 只需拷贝到 `data/<目录>/anchors/` 根目录，Video 任务通过 asset picker 直接从该目录选图
 
 #### Video 任务输出目录用数据目录名
 - **之前**：`runtime/outputs/<task_name>/<run_id>/`
@@ -311,8 +349,8 @@ data/<数据目录>/
 - 替代原来的"任务 ID"字段，通过文件夹选择器选取
 - 任务名称独立保留，用于显示
 
-#### 2. Video 任务选 Anchor 图默认从 `anchors/selected/` 选
-- asset picker 检测到 anchors 类别时自动导航到 selected 子目录
+#### 2. Video 任务选 Anchor 图默认从 `anchors/` 根目录选
+- asset picker 检测到 anchors 类别时自动导航到 `anchors/` 根目录
 
 #### 3. Anchor 中断状态改为 failed
 - 和 Video 任务统一，不再有 `interrupted` 状态
@@ -325,7 +363,7 @@ data/<数据目录>/
 - `idolmv_pipeline/web/handlers.py` — promote 逻辑简化
 - `idolmv_pipeline/web/anchor_jobs.py` — 中断状态改为 failed
 - `idolmv_pipeline/web/static/modules/anchor.js` — 表单/列表/promote 适配
-- `idolmv_pipeline/web/static/modules/task.js` — asset picker 默认到 selected/
+- `idolmv_pipeline/web/static/modules/task.js` — asset picker 默认到 anchors/ 根目录
 - `idolmv_pipeline/web/static/index.html` — Anchor 表单字段调整
 
 ### 📚 文档更新
@@ -615,7 +653,7 @@ outputs/
   - 任务列表：Assets / 编辑 / 运行
   - Anchor 任务列表：编辑 / 生成
   - 视频审核：推荐 / 不推荐 / 发布已选
-  - Anchor 审核：推荐 / 不推荐 / 设为 Anchor / 批量推介
+  - Anchor 审核：设为 Anchor
   - 工具栏：按当前配置再生成一批
 - **文件**: `app.js`, `modules/task.js`, `modules/anchor.js`
 

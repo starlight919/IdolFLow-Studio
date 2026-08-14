@@ -152,12 +152,133 @@ export function renderAnchorAspects() {
   syncAspectSourceDropdowns(savedSources);
 }
 
+export function scrollToAnchorUpload() {
+  const row = $('#anchor-upload-actions');
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1600);
+  }
+}
+
+export function scrollToAnchorDir() {
+  const input = $('#anchor-id');
+  if (input) {
+    input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    input.classList.add('flash');
+    input.focus();
+    setTimeout(() => input.classList.remove('flash'), 1600);
+  }
+}
+
+export async function checkAnchorRefDir() {
+  const tip = $('#anchor-ref-tip');
+  if (!tip) return;
+  const needDir = $('#anchor-ref-need-dir');
+  const empty = $('#anchor-ref-empty');
+  const generated = $('#anchor-ref-generated');
+  const pathEl = $('#anchor-ref-path');
+  const dataDir = $('#anchor-id')?.value.trim();
+
+  // 数据目录变化时清空旧目录残留的参考图。
+  // 手动在输入框改目录走 oninput（不经过 chooseFolder），这里检测目录变化幂等兜底；
+  // 通过「浏览」选择器切换时 chooseFolder 已清空，此处 store.anchorReferences 已为空，无副作用。
+  if (store._anchorDir !== dataDir) {
+    if (store.anchorReferences.length) {
+      store.anchorReferences = [];
+      store.currentAnchorTask = null;
+      syncAspectSourceDropdowns();
+      renderAnchorReferences();
+    }
+    store._anchorDir = dataDir;
+  }
+
+  // 未填数据目录 → 提示先填
+  if (!dataDir) {
+    if (needDir) needDir.style.display = '';
+    if (empty) empty.style.display = 'none';
+    if (generated) generated.style.display = 'none';
+    tip.hidden = false;
+    return;
+  }
+  if (needDir) needDir.style.display = 'none';
+
+  // 已填数据目录 → 检查 anchors/anchor-references/ 是否有图片
+  const rel = `${dataDir}/anchors/anchor-references`;
+  if (pathEl) pathEl.textContent = `data_root/${rel}`;
+  let hasRefImage = false;
+  try {
+    const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(rel)}`);
+    const items = data.items || [];
+    hasRefImage = items.some((i) => !i.directory && /\.(png|jpe?g|webp)$/i.test(i.name));
+  } catch {
+    hasRefImage = false;
+  }
+
+  // 额外检测并区分两类 Anchor 图：
+  //   - anchors/ 根目录（正式图，含手动上传与「设为 Anchor」）
+  //   - generated/<run_id>/（生成候选图，尚未「设为 Anchor」）
+  const countImg = async (dirRel) => {
+    try {
+      const d = await api(`/api/files?root=data_root&path=${encodeURIComponent(dirRel)}`);
+      return (d.items || []).filter((i) => !i.directory && /\.(png|jpe?g|webp)$/i.test(i.name)).length;
+    } catch {
+      return 0;
+    }
+  };
+  const rootCount = await countImg(`${dataDir}/anchors`);
+  const generatedRuns = (() => {
+    // generated/ 下是多个 run 子目录，逐层累加图片数
+    return api(`/api/files?root=data_root&path=${encodeURIComponent(`${dataDir}/anchors/generated`)}`)
+      .then(async (d) => {
+        let n = 0;
+        for (const item of (d.items || [])) {
+          if (item.directory) n += await countImg(`${dataDir}/anchors/generated/${item.name}`);
+        }
+        return n;
+      })
+      .catch(() => 0);
+  })();
+  const generatedCountNum = await generatedRuns;
+  const existingCount = rootCount + generatedCountNum;
+
+  // 分别提示正式图与生成候选图，避免把手动上传的正式图误称为「已生成」
+  if (generated) {
+    const parts = [];
+    if (rootCount > 0) parts.push(`已有 <code>${rootCount}</code> 张正式 Anchor 图（anchors/ 根目录，可直接在视频任务里使用）`);
+    if (generatedCountNum > 0) parts.push(`另有 <code>${generatedCountNum}</code> 张生成候选图（generated/，需「设为 Anchor」后固定到正式目录）`);
+    if (parts.length) {
+      generated.innerHTML = parts.join('；') + '。';
+      generated.style.display = '';
+      tip.hidden = false;
+    } else {
+      generated.style.display = 'none';
+    }
+  }
+
+  // 参考图提示：无参考图时显示「还没有参考图」
+  if (!hasRefImage) {
+    if (empty) empty.style.display = '';
+    tip.hidden = false;
+  } else {
+    if (empty) empty.style.display = 'none';
+    // 有参考图且无已有 Anchor 图 → 隐藏整个提示
+    if (existingCount === 0) tip.hidden = true;
+  }
+}
+
 export function renderAnchorReferences() {
   const list = $('#anchor-reference-list');
   if (!list) return;
 
+  checkAnchorRefDir();
+
+  // Update count badge in the upload-actions bar
+  const countEl = $('#anchor-ref-count');
+  if (countEl) countEl.textContent = String(store.anchorReferences.length);
+
   if (!store.anchorReferences.length) {
-    list.innerHTML = '<p class="hint">尚未添加参考图片。上传后点击图片可展开选择参考点。</p>';
+    list.innerHTML = '<p class="hint">尚未添加参考图片。使用上方的「从数据目录选择」或「本机上传」添加。</p>';
     renderAspectSourceSummary();
     return;
   }
@@ -183,20 +304,20 @@ export function renderAnchorReferences() {
       return `<article class="reference-card" id="ref-card-${i}">
         <div class="ref-thumb-wrap" onclick="toggleRefExpand(${i})">
           <img class="reference-thumb" src="${anchorReferencePreview(r)}" loading="lazy">
-          <span class="ref-expand-icon">${hasBindings ? '▾' : '▸'}</span>
+          <span class="ref-expand-icon">▾</span>
         </div>
         <div class="reference-summary">
           <strong onclick="toggleRefExpand(${i})" style="cursor:pointer">图${i + 1}: ${escapeHtml(r.file.split('/').pop())}</strong>
           ${hasBindings
             ? `<span class="ref-aspect-tags">${labels.map((l) => `<span class="ref-aspect-tag">${escapeHtml(l)}</span>`).join(' ')}</span>`
-            : '<span class="ref-aspect-tags muted">点击展开选择参考点</span>'}
+            : '<span class="ref-aspect-tags muted">点击收起</span>'}
           <label class="watermark-option">
             <input type="checkbox" ${r.remove_watermark ? 'checked' : ''} onchange="toggleAnchorWatermark(${i}, this.checked)">
             <span>去除水印/文字</span>
           </label>
           <button type="button" class="secondary" onclick="removeAnchorReference(${i})">移除</button>
         </div>
-        <div class="ref-expandable" id="ref-expand-${i}" ${hasBindings ? '' : 'hidden'}>
+        <div class="ref-expandable" id="ref-expand-${i}">
           <div class="ref-aspect-checks">
             ${presets.map(([key, item]) => {
               const isBound = boundAspects.includes(key);
@@ -210,7 +331,7 @@ export function renderAnchorReferences() {
             }).join('')}
           </div>
           <input value="${escapeHtml(r.note || '')}" class="ref-note" placeholder="补充描述（可选）"
-            onchange="store.anchorReferences[${i}].note = this.value">
+            oninput="updateAnchorNote(${i}, this.value)">
         </div>
       </article>`;
     })
@@ -229,6 +350,13 @@ function toggleRefExpand(refIndex) {
   if (icon) icon.textContent = el.hidden ? '▸' : '▾';
 }
 window.toggleRefExpand = toggleRefExpand;
+
+/** 实时写回参考图的补充描述（note），避免添加新图重渲染时丢失 */
+export function updateAnchorNote(refIndex, value) {
+  if (store.anchorReferences[refIndex]) {
+    store.anchorReferences[refIndex].note = value;
+  }
+}
 
 /** Bind/unbind an aspect to a reference image from the expanded card */
 export function toggleRefAspectBinding(refIndex, aspectKey, checked) {
@@ -268,7 +396,10 @@ export async function saveAnchorTask(event) {
 
   // The anchor-id field IS the data directory name — it must be filled in.
   const taskId = $('#anchor-id').value.trim();
-  if (!taskId) return toast('请先选择数据目录');
+  if (!taskId) {
+    toast('请先选择数据目录');
+    return null;
+  }
   const pending = store.anchorReferences.filter((r) => r._blob);
   if (pending.length) {
     for (const ref of pending) {
@@ -281,13 +412,41 @@ export async function saveAnchorTask(event) {
         delete ref._preview;
       } catch (e) {
         toast(`上传 ${ref.file} 失败: ${e.message}`);
-        return;
+        return null;
       }
     }
   }
 
+  // 编辑已有任务且改了数据目录（id）→ 让用户选择「新建」还是「更新」
+  const editingId = store.currentAnchorTask?.id;
+  if (editingId && editingId !== taskId) {
+    showAnchorSaveModeDialog(taskId, editingId);
+    return null;
+  }
+
+  try {
+    return await _doSaveAnchorTask(taskId);
+  } catch (e) {
+    toast(e.message);
+    return null;
+  }
+}
+
+async function _doSaveAnchorTask(taskId) {
+  const editingId = store.currentAnchorTask?.id;
+  // 同名任务检查（更新模式除外）
+  const existing = store.anchorTasks?.find((t) => t.id === taskId);
+  if (existing && existing.id !== editingId) {
+    throw new Error(`同名数据目录"${taskId}"已有 Anchor 任务，请改名或选择更新已有任务`);
+  }
+  // 更新模式且改了 id：先删旧任务，再保存新任务
+  if (editingId && editingId !== taskId) {
+    await api(`/api/anchor-tasks/${encodeURIComponent(editingId)}`, 'DELETE');
+  }
   const task = await post('/api/anchor-tasks', anchorTaskForm());
   $('#anchor-id').value = task.id;
+  store._anchorDir = task.id;  // 同步目录（编辑改名后避免后续 checkAnchorRefDir 误清空）
+  store.currentAnchorTask = task;
   toast('Anchor 任务已保存');
   await loadAnchorTasks();
   // Scroll to the task list so user can see where it went
@@ -296,11 +455,43 @@ export async function saveAnchorTask(event) {
   return task;
 }
 
+function showAnchorSaveModeDialog(taskId, editingId) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `<div class="modal-card" style="max-width:400px">
+    <h3>保存方式</h3>
+    <p>你正在编辑已有 Anchor 任务 <strong>${escapeHtml(store.currentAnchorTask?.name || '')}</strong>，但修改了数据目录，这会导致创建新任务。</p>
+    <div class="actions" style="flex-direction:column;gap:8px">
+      <button onclick="this.closest('.modal').remove(); window._anchorSaveAsNew?.()" style="width:100%">保存为新任务</button>
+      <button class="secondary" onclick="this.closest('.modal').remove(); window._anchorUpdateExisting?.()" style="width:100%">更新原任务</button>
+      <button class="secondary" onclick="this.closest('.modal').remove()" style="width:100%">取消</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.hidden = false;
+
+  window._anchorSaveAsNew = async () => {
+    try {
+      // 新任务：临时清掉编辑状态，直接保存（不删旧任务）
+      store.currentAnchorTask = null;
+      await _doSaveAnchorTask(taskId);
+      toast('已保存为新任务');
+    } catch (e) { toast(e.message); }
+  };
+  window._anchorUpdateExisting = async () => {
+    try {
+      // 更新：保留编辑状态，_doSaveAnchorTask 会先删旧再存新
+      await _doSaveAnchorTask(taskId);
+      toast('任务已更新');
+    } catch (e) { toast(e.message); }
+  };
+}
+
 function uploadFile(blob, filename, category, taskId) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/uploads');
-    xhr.setRequestHeader('X-Task-Id', taskId);
+    xhr.setRequestHeader('X-Task-Id', encodeURIComponent(taskId));
     xhr.setRequestHeader('X-Filename', encodeURIComponent(filename));
     xhr.setRequestHeader('X-Category', category);
     xhr.onload = () => {
@@ -315,8 +506,17 @@ function uploadFile(blob, filename, category, taskId) {
 export function resetAnchorForm() {
   $('#anchor-form').reset();
   store.anchorReferences = [];
+  store.currentAnchorTask = null;
+  store._anchorDir = undefined;
   renderAnchorAspects();
   renderAnchorReferences();
+  setAnchorResetBtnLabel();
+}
+
+// 编辑态显示「取消」，非编辑态显示「新任务」
+export function setAnchorResetBtnLabel() {
+  const btn = $('#anchor-reset-btn');
+  if (btn) btn.textContent = store.currentAnchorTask ? '取消' : '新任务';
 }
 
 export async function previewAnchorPrompt() {
@@ -345,6 +545,7 @@ export function closeAnchorPromptPreview() {
 export async function requestAnchorStart() {
   try {
     const task = await saveAnchorTask();
+    if (!task) return;
     store.pendingAnchorTask = task.id;
     store.pendingTask = null;
     $('#submit-password').value = '';
@@ -376,6 +577,8 @@ export function uploadAnchorReference() {
     });
     renderAnchorReferences();
     syncAspectSourceDropdowns();
+    // 清空 file input，方便下次选择（同文件也能再次选中）
+    $('#anchor-upload-file').value = '';
     toast(`已添加参考图: ${file.name} → 请到 step 3 为参考点指定来源`);
   };
   reader.onerror = () => toast('读取图片失败，请重试');
@@ -546,8 +749,10 @@ export async function recoverAnchorTask(taskId) {
 export function editAnchorTask(id) {
   const t = store.anchorTasks.find((x) => x.id === id);
   if (!t) return;
+  store.currentAnchorTask = t;
   $('#anchor-name').value = t.name;
   $('#anchor-id').value = t.id;
+  store._anchorDir = t.id;  // 同步目录，避免 renderAnchorReferences 内部的 checkAnchorRefDir 误清空刚回填的参考图
   $('#anchor-candidates').value = t.candidates;
   $('#anchor-size').value = t.size;
   $('#anchor-resolution').value = t.resolution;
@@ -595,7 +800,8 @@ export function editAnchorTask(id) {
   // Now render references with correct bindings visible
   renderAnchorReferences();
 
-  scrollTo({ top: 0, behavior: 'smooth' });
+  setAnchorResetBtnLabel();
+  scrollTo({ top: 0, behavior: 'auto' });
 }
 
 export async function deleteAnchorTask(id) {
@@ -678,21 +884,13 @@ export async function loadAnchorReview(runId) {
 function renderAnchorReview() {
   const run = $('#anchor-review-run').value;
   if (!store.anchorManifest) return;
-  const selected = store.anchorManifest.candidates.filter(
-    (c) => store.anchorReviewState.votes[c.id] === 'up' && !store.anchorReviewState.published[c.id]
-  );
 
-  const toolbar = $('#anchor-review-toolbar');
-  if (toolbar) {
-    toolbar.innerHTML = `<button class="secondary" data-action="anchor-regenerate">按当前配置再生成一批</button>
-      <button data-action="anchor-promote-selected">批量设为 Anchor (${selected.length})</button>`;
-  }
+  renderAnchorReviewToolbar();
 
   const content = $('#anchor-review-content');
   if (!content) return;
   content.innerHTML = store.anchorManifest.candidates
     .map((c) => {
-      const vote = store.anchorReviewState.votes[c.id];
       const used = store.anchorReviewState.published[c.id];
       return `<article class="anchor-review-card ${used ? 'published' : ''}" data-id="${c.id}">
         <img src="/api/anchor-runs/${run}/media/${encodeURIComponent(c.id)}">
@@ -701,10 +899,8 @@ function renderAnchorReview() {
           <span>${store.anchorManifest.size}</span>
         </div>
         <div class="review-actions">
-          <button class="${vote === 'up' ? 'selected' : ''}" data-action="anchor-vote" data-vote="up">推荐</button>
-          <button class="${vote === 'down' ? 'selected' : ''}" data-action="anchor-vote" data-vote="down">不推荐</button>
           <a href="/api/anchor-runs/${run}/download/${encodeURIComponent(c.id)}">下载</a>
-          <button data-action="anchor-promote" ${used ? 'disabled' : ''}>${used ? '已设为 Anchor' : '设为 Anchor'}</button>
+          <button data-action="anchor-promote" ${used ? 'class="selected"' : ''}>${used ? '取消 Anchor' : '设为 Anchor'}</button>
         </div>
       </article>`;
     })
@@ -719,32 +915,30 @@ export async function regenerateAnchorBatch() {
   $('#submit-password').focus();
 }
 
-export async function anchorVote(id, vote, button) {
-  const run = $('#anchor-review-run').value;
-  await post(`/api/anchor-runs/${run}/vote`, { id, vote });
-  store.anchorReviewState.votes[id] = vote;
-  button.parentElement.querySelectorAll('button').forEach((b) => b.classList.remove('selected'));
-  button.classList.add('selected');
+function renderAnchorReviewToolbar() {
+  const toolbar = $('#anchor-review-toolbar');
+  if (!toolbar || !store.anchorManifest) return;
+  toolbar.innerHTML = `<button class="secondary" data-action="anchor-regenerate">按当前配置再生成一批</button>`;
 }
 
 export async function promoteAnchor(id) {
+  const run = $('#anchor-review-run').value;
+  const used = store.anchorReviewState.published[id];
   try {
-    const result = await post(`/api/anchor-runs/${$('#anchor-review-run').value}/promote`, { id });
-    store.anchorReviewState.published[id] = result;
-    renderAnchorReview();
-    toast('已设为 Anchor，图片位于 anchors/selected/');
+    if (used) {
+      // 取消已设为 Anchor 的候选
+      await post(`/api/anchor-runs/${run}/unpromote`, { id });
+      delete store.anchorReviewState.published[id];
+      renderAnchorReview();
+      toast('已取消 Anchor');
+    } else {
+      const result = await post(`/api/anchor-runs/${run}/promote`, { id });
+      store.anchorReviewState.published[id] = result;
+      renderAnchorReview();
+      toast('已设为 Anchor，图片位于 anchors/');
+    }
   } catch (e) {
     toast(e.message);
-  }
-}
-
-export async function promoteSelectedAnchors() {
-  if (!store.anchorManifest) return;
-  const selected = store.anchorManifest.candidates.filter(
-    (c) => store.anchorReviewState.votes[c.id] === 'up' && !store.anchorReviewState.published[c.id]
-  );
-  for (const candidate of selected) {
-    await promoteAnchor(candidate.id);
   }
 }
 
@@ -764,25 +958,39 @@ export async function pickAnchorReferences() {
   store.anchorPickerMode = true;
   store.assetPickerCategory = 'anchor-references';
   const dataDir = $('#anchor-id').value.trim();
-  // Anchor references live under <dataDir>/anchors/, so navigate there directly.
-  store.assetPickerRoot = dataDir ? `${dataDir}/anchors` : '';
+  if (!dataDir) {
+    toast('请先填写数据目录（步骤 1），再选择图片');
+    return;
+  }
+  // 参考图在 <dataDir>/anchors/anchor-references/，直接进入该子目录
+  // （anchors/ 根目录放的是最终任务 Anchor 图，不是生成参考图）
+  store.assetPickerRoot = dataDir ? `${dataDir}/anchors/anchor-references` : '';
   store.assetPickerPath = store.assetPickerRoot;
   store.assetPickerSelected = new Set();
   $('#asset-picker-title').textContent = '选择 Anchor 参考图片';
   $('#asset-picker-modal').hidden = false;
   // browseAssets is defined in task module, called via window
+  if (window.browseAssets) await window.browseAssets(store.assetPickerPath);
 }
 
 export async function openInlineAnchor() {
   showView('anchors');  // defined in app module
   // 跳转后回到 Anchor 页面顶部（避免停留在上一个视图的滚动位置）
-  scrollTo({ top: 0, behavior: 'smooth' });
+  scrollTo({ top: 0, behavior: 'auto' });
   // Pre-fill the anchor data directory from the current video task form
   const taskDir = $('#task-dir')?.value.trim() || '';
   const taskName = $('#task-name')?.value.trim() || '';
   if (taskDir) {
     $('#anchor-id').value = taskDir;
     $('#anchor-name').value = taskName || taskDir;
+    // 目录变化时清空旧目录残留的参考图（与 checkAnchorRefDir 的清空逻辑一致）
+    if (store._anchorDir !== taskDir) {
+      store.anchorReferences = [];
+      store.currentAnchorTask = null;
+      store._anchorDir = taskDir;
+      syncAspectSourceDropdowns();
+      renderAnchorReferences();
+    }
   }
 }
 
@@ -1147,11 +1355,25 @@ export function applyOptimizerResult() {
 /** Build final text: selected preset labels + manual text */
 function buildPresetText(textareaId, presetType) {
   const el = $(textareaId);
-  const manual = el ? el.value.trim() : '';
+  let manual = el ? el.value.trim() : '';
   const selected = [];
-  $$(`.preset-tag.selected[data-preset-type="${presetType}"]`).forEach((tag) => {
-    selected.push(tag.dataset.label);
+  // 收集该类型的所有标签（用于从手动文本中剔除，避免标签文本残留/重复）
+  const allLabels = [];
+  $$(`.preset-tag[data-preset-type="${presetType}"]`).forEach((tag) => {
+    allLabels.push(tag.dataset.label);
+    if (tag.classList.contains('selected')) {
+      selected.push(tag.dataset.label);
+    }
   });
+  // 从手动文本中剔除所有标签文本（无论选中与否），得到纯手动输入
+  for (const label of allLabels) {
+    manual = manual.split(label).join('');
+  }
+  manual = manual
+    .split('；')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('；');
   const parts = [];
   if (selected.length) parts.push(selected.join('；'));
   if (manual) parts.push(manual);
@@ -1186,6 +1408,11 @@ function renderPresetTags(containerId, presets, presetType) {
 /** Toggle a quality/negative preset tag selection */
 function togglePresetTag(el) {
   el.classList.toggle('selected');
+  // 实时联动：把「选中标签 + 手动文本」合并写回对应 textarea，让用户立即看到效果
+  const type = el.dataset.presetType;
+  const textareaId = type === 'negative' ? '#anchor-negative' : '#anchor-description';
+  const ta = $(textareaId);
+  if (ta) ta.value = buildPresetText(textareaId, type);
 }
 window.togglePresetTag = togglePresetTag;
 

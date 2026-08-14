@@ -241,9 +241,6 @@ class AnchorTaskStore:
     def generated_dir(self, data_dir: str, run_id: str) -> Path:
         return self.asset_path(data_dir, f"generated/{run_id}")
 
-    def selected_dir(self, data_dir: str) -> Path:
-        return self.asset_path(data_dir, "selected")
-
     def _path(self, data_dir: str) -> Path:
         normalized = _safe_dir_name(data_dir)
         return self.config.resolve_inside("data_root", f"{normalized}/anchors/anchor-task.json")

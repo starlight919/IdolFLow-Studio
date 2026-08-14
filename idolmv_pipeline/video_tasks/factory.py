@@ -20,9 +20,9 @@ from idolmv_pipeline.video_tasks.store import TaskStore
 logger = logging.getLogger(__name__)
 
 
-def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore | None = None) -> VideoTaskAdapter:
+def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore | None = None, require_anchors: bool = True) -> VideoTaskAdapter:
     store = store or TaskStore(config)
-    task = store.validate(task)
+    task = store.validate(task, require_anchors=require_anchors)
     task_dir = store.task_dir(task["id"], task.get("task_dir"))
     lyrics = str(task.get("lyrics", "")).strip()
     if task.get("lyrics_file"):

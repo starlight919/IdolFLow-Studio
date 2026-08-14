@@ -4,8 +4,8 @@ Anchor 设计、视频生成、任务运行、候选审核与下载的一体化 
 
 - GPT Image 2 Anchor 生成。
 - Seedance 对口型、口型 + 动作、纯动作视频生成。
-- 每张 Anchor 参考图可对每个维度分别配置参考内容和约束。
-- 支持逐图去水印、批量候选、重新生成、审核和 promote。
+- 每张 Anchor 参考图可对每个维度分别配置参考内容和约束，并支持逐图填写补充描述。
+- 支持逐图去水印、批量候选、重新生成、下载与设为 Anchor。
 - 所有生成使用 API，不需要 GPU、模型权重或 model path。
 
 📖 **快速参考**: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) | 📚 **完整文档**: [docs/README.md](docs/README.md) | 📝 **更新日志**: [docs/CHANGELOG.md](docs/CHANGELOG.md)
@@ -195,7 +195,7 @@ bash scripts/stop.sh
 
 ```text
 data/<数据目录>/                  # 素材、任务配置、Anchor 模块
-  ├── anchors/                    # Anchor 参考图、生成候选、精选图
+  ├── anchors/                    # Anchor 参考图、生成候选、正式图（上传 / 设为 Anchor）
   ├── references/                 # 参考音视频（视频 + 音频）
   └── tasks/                      # Video 任务配置（可有多个）
 runtime/outputs/<数据目录>/        # 生成的视频
@@ -245,7 +245,7 @@ Anchor 是整个系统的"主角"抽象。它不是一张图，而是一组**可
 
 **Anchor 的核心思路**：把"人物形象"与"视频任务"解耦。
 
-1. **先造角色，再做视频**：在 Anchor 面板上传参考图（脸、服装、场景），生成多个候选形象图（如"站姿正面""坐姿""全身""特写"），存入目录的 `anchors/` 子目录。
+1. **先造角色，再做视频**：在 Anchor 面板上传参考图（脸、服装、场景）或从数据目录选取已有参考图（`anchors/anchor-references/`），生成多个候选形象图（如"站姿正面""坐姿""全身""特写"），存入目录的 `anchors/` 子目录。
 2. **跨任务复用**：同一个数据目录下创建多个视频任务（唱歌版、跳舞版），都引用同一批 Anchor 图，保证不同任务里的主角形象一致。
 3. **每个 Anchor 独立出片**：一个任务会把每个 Anchor × 每个参考视频 × 候选数 组合生成视频。比如 2 个 Anchor × 1 个参考视频 × 4 候选 = 8 条候选视频。
 

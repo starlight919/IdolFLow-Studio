@@ -60,7 +60,9 @@ class AnchorJobManager:
         job = {
             "run_id": run_id, "task_id": task.id, "task_name": task.name, "media_type": "image",
             "stage": "queued", "message": "等待生成", "status": "queued",
-            "completed": 0, "total": total, "created_at": datetime.now().isoformat(timespec="seconds"), "error": "",
+            "completed": 0, "total": total,
+            "stage_completed": 0, "stage_total": 0,
+            "created_at": datetime.now().isoformat(timespec="seconds"), "error": "",
         }
         with self.lock:
             self.jobs[run_id] = job
@@ -74,20 +76,34 @@ class AnchorJobManager:
             runner = AnchorTaskRunner(self.store, progress=lambda **values: self._update(run_id, **values))
             state = runner.run(task_id, run_id, candidates)
             status = "completed" if state.data["status"] == "done" else "failed"
-            self._update(run_id, status=status, stage=status, message="Anchor 候选已完成" if status == "completed" else "部分候选失败", manifest=state.data.get("manifest", ""))
+            total = self.jobs[run_id]["total"]
+            self._update(
+                run_id, status=status, stage=status,
+                message="Anchor 候选已完成" if status == "completed" else "部分候选失败",
+                manifest=state.data.get("manifest", ""),
+                completed=total, total=total,
+            )
         except Exception as exc:
             self._update(run_id, status="failed", stage="failed", message="Anchor 生成失败", error=str(exc))
 
     def _update(self, run_id: str, **values) -> None:
         with self.lock:
             job = self.jobs[run_id]
-            completed = values.pop("completed", None)
-            total = values.pop("total", None)
-            job.update(values, updated_at=datetime.now().isoformat(timespec="seconds"))
-            if completed is not None:
-                job["completed"] = completed
-            if total is not None:
-                job["total"] = total
+            stage = values.get("stage", job["stage"])
+            stage_completed = values.pop("completed", None)
+            stage_total = values.pop("total", None)
+            job.update(values, stage=stage, updated_at=datetime.now().isoformat(timespec="seconds"))
+            if stage_completed is not None:
+                job["stage_completed"] = stage_completed
+            if stage_total is not None:
+                job["stage_total"] = stage_total
+            # 只有进入真正的生成/完成阶段才推进整体进度条，
+            # 避免提交（submitting）阶段就把进度拉满；
+            # failed 阶段不推进，进度条停在已完成数，与视频任务一致
+            if stage in {"generating", "completed"} and stage_completed is not None:
+                job["completed"] = stage_completed
+                if stage_total is not None:
+                    job["total"] = stage_total
             self._save(job)
 
     def _save(self, job: dict) -> None:
@@ -165,20 +181,20 @@ class AnchorJobManager:
         if not task_id:
             raise ValueError(f"No task_id in job {run_id}")
         task = self.store.get(task_id)
-        runner = AnchorTaskRunner(task, self.store, self.config, progress=lambda **values: self._update(run_id, **values))
-        self.executor.submit(self._resume_run, run_id, runner)
+        runner = AnchorTaskRunner(self.store, progress=lambda **values: self._update(run_id, **values))
+        self.executor.submit(self._resume_run, run_id, task_id, runner)
 
-    def _resume_run(self, run_id: str, runner: AnchorTaskRunner) -> None:
+    def _resume_run(self, run_id: str, task_id: str, runner: AnchorTaskRunner) -> None:
         """Resume polling from existing run.json state."""
         try:
             self._update(run_id, status="running", stage="generating", message="正在恢复轮询...")
-            state = runner.resume(run_id)
+            state = runner.resume(task_id, run_id)
             self._update(
                 run_id, status="completed" if state.data["status"] == "done" else "failed",
                 stage="completed" if state.data["status"] == "done" else "failed",
                 message="全部 Anchor 候选已完成" if state.data["status"] == "done" else "部分 Anchor 候选失败",
-                completed=state.data.get("total", self.jobs[run_id].get("total", 0)),
-                total=state.data.get("total", self.jobs[run_id].get("total", 0)),
+                completed=self.jobs[run_id].get("total", 0),
+                total=self.jobs[run_id].get("total", 0),
             )
         except Exception as exc:
             self._update(run_id, status="failed", stage="failed", message="恢复运行失败", error=str(exc))

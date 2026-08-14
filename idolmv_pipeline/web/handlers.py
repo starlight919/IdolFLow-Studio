@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import shutil
 import threading
 import time
@@ -18,6 +19,13 @@ from idolmv_pipeline.video_tasks.factory import adapter_from_task
 from idolmv_pipeline.video_tasks.prompts import build_prompt
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web" / "static"
+
+_SAFE_FILENAME = re.compile(r"[\\/:*?\"<>|\s]+")
+
+
+def safe_filename(value: str) -> str:
+    """下载文件名安全化：保留中文、字母数字、下划线、连字符，替换路径分隔符等非法字符。"""
+    return _SAFE_FILENAME.sub("_", value).strip("_") or "candidate"
 
 # ── Route Registry ───────────────────────────────────────────────────────────
 
@@ -594,30 +602,42 @@ def handle_anchor_runs_post(handler, path: str):
     manifest = json.loads(manifest_path.read_text())
     candidate = find_candidate(manifest, data["id"])
     state_path, state = handler.app.review_state(manifest_path)
-    if action == "vote":
-        with handler.app.review_lock:
-            state["votes"][data["id"]] = data["vote"]
-            handler.app.save_review_state(state_path, state)
-        return json_response(handler, 200, {"ok": True})
     if action == "promote":
         source = Path(candidate["file"]).resolve()
         data_dir = job["task_id"]  # anchor task_id is the data_dir
-        selected_dir = handler.app.anchor_store.selected_dir(data_dir)
-        selected_dir.mkdir(parents=True, exist_ok=True)
+        # 设为 Anchor 的图直接落到 anchors/ 根目录，与上传的 anchor 图同目录
+        anchors_dir = handler.app.anchor_store.task_dir(data_dir)
+        anchors_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{safe_name(job['task_name'])}_{safe_name(run_id)}_{candidate['candidate']:02d}.jpg"
-        destination = selected_dir / filename
+        destination = anchors_dir / filename
         if not destination.exists():
             temporary = destination.with_suffix(".tmp")
             shutil.copy2(source, temporary)
             temporary.replace(destination)
         # Relative path from the data directory root, so video tasks can
-        # reference it as ``anchors/selected/<filename>``.
+        # reference it as ``anchors/<filename>``.
         data_root = handler.app.anchor_store.data_root_dir(data_dir)
         relative = destination.relative_to(data_root).as_posix()
         with handler.app.review_lock:
             state["published"][data["id"]] = {"filename": filename, "file": relative}
             handler.app.save_review_state(state_path, state)
         return json_response(handler, 200, state["published"][data["id"]])
+    if action == "unpromote":
+        with handler.app.review_lock:
+            published = state["published"].pop(data["id"], None)
+            handler.app.save_review_state(state_path, state)
+        # 删除已复制到 anchors/ 的图片文件
+        if published and published.get("file"):
+            relative = published["file"]
+            # 检查是否被视频任务引用，避免误删正在使用的 Anchor 图
+            for task in handler.app.store.list():
+                if any(a.get("file") == relative for a in (task.get("anchors") or [])):
+                    return json_response(handler, 409, {"error": f"该图片正被视频任务「{task.get('name', task.get('id'))}」引用，无法取消 Anchor"})
+            data_root = handler.app.anchor_store.data_root_dir(job["task_id"])
+            target = (data_root / relative).resolve()
+            if target.exists() and target.is_file():
+                target.unlink()
+        return json_response(handler, 200, {"ok": True})
     handler.send_error(404)
 
 
@@ -633,6 +653,8 @@ def handle_tasks_get(handler, path: str):
         return json_response(handler, 200, _task_assets(handler, task_id))
     if len(parts) == 4 and parts[3] == "lyrics-timestamps":
         return _get_lyrics_timestamps(handler, task_id)
+    if len(parts) == 4 and parts[3] == "missing-assets":
+        return json_response(handler, 200, _missing_assets(handler, task_id))
     json_response(handler, 200, handler.app.store.get(task_id))
 
 
@@ -698,6 +720,31 @@ def _task_assets(handler, task_id: str) -> dict:
     return {"task_id": task_id, "path": str(path), "items": items}
 
 
+def _missing_assets(handler, task_id: str) -> dict:
+    """Return which referenced files (anchors/references) no longer exist on disk."""
+    task = handler.app.store.get(task_id)
+    task_dir = handler.app.store.task_dir(task.get("data_dir", ""), task.get("task_dir"))
+    missing_anchors = []
+    missing_references = []
+    for idx, item in enumerate(task.get("anchors") or []):
+        file = str(item.get("file", ""))
+        if not file:
+            continue
+        try:
+            handler.app.store._asset_path(task_dir, file)
+        except ValueError:
+            missing_anchors.append({"index": idx, "file": file})
+    for idx, item in enumerate(task.get("references") or []):
+        file = str(item.get("file", ""))
+        if not file:
+            continue
+        try:
+            handler.app.store._asset_path(task_dir, file)
+        except ValueError:
+            missing_references.append({"index": idx, "file": file})
+    return {"task_id": task_id, "missing_anchors": missing_anchors, "missing_references": missing_references}
+
+
 @_register("POST", "/api/uploads")
 def handle_upload(handler, path: str):
     task_id = unquote(handler.headers.get("X-Task-Id", "")).strip()
@@ -705,7 +752,8 @@ def handle_upload(handler, path: str):
     category = handler.headers.get("X-Category", "references")
     if not task_id or not filename or category not in {"anchors", "references", "anchor-references"}:
         raise ValueError("task, filename and valid category are required")
-    # Anchor references live under <data_dir>/anchors/, not <data_dir>/ directly.
+    # Anchor references live under <data_dir>/anchors/anchor-references/, not <data_dir>/ directly.
+    # Anchor 图片（视频任务素材）统一落到 anchors/ 根目录，与「设为 Anchor」的图同目录。
     subdir = "anchors/anchor-references" if category == "anchor-references" else category
     root = handler.app.config.resolve_inside("upload_root", task_id)
     destination = (root / subdir / filename).resolve()
@@ -750,12 +798,6 @@ def handle_runs_get(handler, path: str):
         return json_response(handler, 200, handler.app.publish_progress.get(run_id, {"running": False, "step": "idle", "message": "尚未发布"}))
     if action == "intermediate":
         return _get_intermediate_for_run(handler, run_id)
-    if action == "resume":
-        try:
-            handler.app.jobs._resume_from_state(run_id)
-            return json_response(handler, 200, {"ok": True})
-        except Exception as exc:
-            return json_response(handler, 400, {"error": str(exc)})
     handler.send_error(404)
 
 
@@ -785,6 +827,12 @@ def handle_runs_post(handler, path: str):
     if len(parts) < 4:
         return json_response(handler, 400, {"error": "missing action"})
     run_id, action = parts[2], parts[3]
+    if action == "resume":
+        try:
+            handler.app.jobs._resume_from_state(run_id)
+            return json_response(handler, 200, {"ok": True})
+        except Exception as exc:
+            return json_response(handler, 400, {"error": str(exc)})
     data = read_json(handler)
     manifest_path, manifest = handler.app.manifest(run_id)
     if action == "vote":
@@ -807,9 +855,11 @@ def _candidate_file(handler, run_id: str, candidate_id: str, download: bool) -> 
     source = Path(candidate.get("file", "")).resolve() if candidate.get("file") else (manifest_path.parents[2] / candidate["path"]).resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
+    # 下载文件名带上「数据目录__任务名」，方便区分不同目录下同名任务的候选
+    # manifest["task"] 即 adapter.name = store.get 返回的 composite id（如「曾曾__跳舞」），已含数据目录
     filename = "_".join((
-        safe_name(manifest["publish"]["filename_prefix"]), safe_name(candidate["anchor"]),
-        safe_name(candidate["reference"]), safe_name(candidate["variant"]),
+        safe_filename(manifest.get("task", "")), safe_filename(candidate["anchor"]),
+        safe_filename(candidate["reference"]), safe_filename(candidate["variant"]),
         f"candidate-{int(candidate['candidate']):02d}.mp4",
     ))
     serve_file(handler, source, "video/mp4", filename if download else None)

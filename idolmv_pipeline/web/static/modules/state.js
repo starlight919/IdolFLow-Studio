@@ -38,6 +38,7 @@ const store = {
   anchorReviewState: null,
   pendingAnchorTask: null,
   anchorPickerMode: false,
+  currentAnchorTask: null,
 
   // ========== Review ==========
   reviewManifest: null,

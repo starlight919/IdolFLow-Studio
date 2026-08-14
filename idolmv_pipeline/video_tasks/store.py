@@ -46,7 +46,12 @@ class TaskStore:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.parent.name
                 task["data_dir"] = data_dir
-                task["id"] = composite_id(data_dir, task.get("id", task.get("name", "")))
+                # 防御脏数据：id 字段若已含 data_dir 前缀（历史手动写入 composite id），循环剥离后再拼接，避免双重前缀
+                raw_id = str(task.get("id") or task.get("name", ""))
+                prefix = f"{data_dir}__"
+                while raw_id.startswith(prefix) and len(raw_id) > len(prefix):
+                    raw_id = raw_id[len(prefix):]
+                task["id"] = composite_id(data_dir, raw_id)
                 result.append(task)
             except (OSError, json.JSONDecodeError):
                 continue
@@ -94,7 +99,8 @@ class TaskStore:
         return task
 
     def save(self, task: dict) -> dict:
-        validated = self.validate(task)
+        # 保存草稿时不校验歌词等生成期约束（strict=False），生成时才严格校验
+        validated = self.validate(task, strict=False)
         data_dir = validated["data_dir"]
         task_id = validated["id"]  # this is the simple id (not composite yet)
         path = self._resolve_path(data_dir, task_id)
@@ -145,7 +151,7 @@ class TaskStore:
 
     # ── validation ────────────────────────────────────────────────────────
 
-    def validate(self, task: dict) -> dict:
+    def validate(self, task: dict, require_anchors: bool = True, strict: bool = True) -> dict:
         name = str(task.get("name", "")).strip()
         if not name:
             raise ValueError("task name is required")
@@ -166,7 +172,9 @@ class TaskStore:
             raise ValueError("could not determine data directory")
 
         actual_task_dir = self.task_dir(data_dir, task_dir_override)
-        for item in anchors + references:
+        # resume 轮询时不需要 anchors（提交阶段才用），仅校验 references（后处理需要）
+        required = (anchors if require_anchors else []) + references
+        for item in required:
             file = str(item.get("file", ""))
             if not file or not self._asset_path(actual_task_dir, file).is_file():
                 raise ValueError(f"missing asset: {file}")
@@ -178,9 +186,11 @@ class TaskStore:
             if not path.is_file():
                 raise ValueError(f"missing lyrics: {lyrics_file}")
             lyrics = path.read_text().strip()
-        has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
-        camera_policy = task.get("camera_policy")
-        build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))
+        # 保存草稿（strict=False）时不校验歌词等生成期约束，仅在生成（strict=True）时严格校验
+        if strict:
+            has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
+            camera_policy = task.get("camera_policy")
+            build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))
 
         result = dict(task)
         result.update(

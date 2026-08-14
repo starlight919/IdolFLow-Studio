@@ -12,7 +12,7 @@ data/<目录名>/
 │   ├── anchor-task.json          # Anchor 任务配置（本模板）
 │   ├── anchor-references/        # 参考图片（references[].file 指向这里）
 │   ├── generated/<run_id>/       # 生成的候选图
-│   └── selected/                 # promote 后的精选图（视频任务从这里选 anchor）
+│   └── *.jpg                     # 上传 / promote 后的正式图（视频任务从这里选 anchor）
 ├── references/                   # 参考音视频（视频任务用）
 └── tasks/                        # 视频任务配置
 ```
@@ -32,4 +32,4 @@ data/<目录名>/
 | `aspects` | 人物特征维度（如五官、发型），`priority` 为 `locked` / `required` |
 | `references` | 参考图片绑定，`file` 指向 `anchors/anchor-references/` 下的图片，`bindings` 声明每个参考图约束哪些特征 |
 
-日常也可直接在 Web 工作台的 Anchor 面板新建任务并上传参考图。
+日常也可直接在 Web 工作台的 Anchor 面板新建任务，通过「本机上传」或「从数据目录选择」（选取 `anchors/anchor-references/` 里已有的图片）添加参考图。

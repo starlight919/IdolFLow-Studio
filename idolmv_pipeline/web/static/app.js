@@ -11,11 +11,11 @@ import {
   renderAnchorAspects, renderAnchorReferences, prepareAnchors, saveAnchorTask,
   resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart, uploadAnchorReference,
   loadAnchorTasks, editAnchorTask, loadAnchorRuns, openAnchorPoll,
-  regenerateAnchorBatch, anchorVote, promoteAnchor, promoteSelectedAnchors,
+  regenerateAnchorBatch, promoteAnchor,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
-  onAspectSourceChange,
-  toggleRefAspectBinding, deleteAnchorTask, recoverAnchorTask,
+  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
+  toggleRefAspectBinding, updateAnchorNote, deleteAnchorTask, recoverAnchorTask,
   renderAnchorQualityPresets, renderAnchorNegativePresets,
   loadAnchorReview,
   // Review
@@ -286,19 +286,11 @@ function setupDelegatedHandlers() {
       regenerateAnchorBatch();
       return;
     }
-    if (target.closest('[data-action="anchor-promote-selected"]')) {
-      promoteSelectedAnchors();
-      return;
-    }
 
     // ── Anchor review card buttons ──
     const anchorCard = target.closest('.anchor-review-card[data-id]');
     if (anchorCard) {
       const id = anchorCard.dataset.id;
-      if (target.closest('[data-action="anchor-vote"]')) {
-        anchorVote(id, target.closest('[data-action="anchor-vote"]').dataset.vote, target.closest('[data-action="anchor-vote"]'));
-        return;
-      }
       if (target.closest('[data-action="anchor-promote"]')) {
         promoteAnchor(id);
         return;
@@ -377,11 +369,11 @@ Object.assign(window, {
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
   requestAnchorStart, uploadAnchorReference, loadAnchorTasks, editAnchorTask,
   loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
-  anchorVote, promoteAnchor, promoteSelectedAnchors,
+  promoteAnchor,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
-  onAspectSourceChange,
-  toggleRefAspectBinding, deleteAnchorTask, recoverAnchorTask,
+  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
+  toggleRefAspectBinding, updateAnchorNote, deleteAnchorTask, recoverAnchorTask,
   renderAnchorQualityPresets, renderAnchorNegativePresets,
   loadAnchorReview,
   // Review
@@ -474,6 +466,7 @@ async function init() {
   $('#task-dir')?.addEventListener('change', () => { updateUploadState(); checkTaskFolderEmpty(); });
   updateUploadState();
   checkTaskFolderEmpty();
+  checkAnchorRefDir();
   $('#close-lyrics-timestamps')?.addEventListener('click', closeLyricsTimestampsEditor);
   // 遮罩点击关闭已统一由 setupModalAccessibility 处理
   $('#add-timestamp-btn')?.addEventListener('click', addTimestamp);

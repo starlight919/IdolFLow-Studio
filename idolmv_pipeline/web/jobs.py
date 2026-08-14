@@ -229,7 +229,9 @@ class JobManager:
         if not task_id:
             raise ValueError(f"No task_id in job {run_id}")
         task = self.store.get(task_id)
-        adapter = adapter_from_task(task, self.config, self.store)
+        # resume 仅继续轮询已提交的候选，不再重新提交，因此无需校验 anchors 图片，
+        # 仅需 references（音视频）用于下载后的裁剪与回灌音频
+        adapter = adapter_from_task(task, self.config, self.store, require_anchors=False)
         runner = VideoTaskRunner(adapter, progress=lambda **values: self._update(run_id, **values))
         self.executor.submit(self._resume_run, run_id, runner)
 

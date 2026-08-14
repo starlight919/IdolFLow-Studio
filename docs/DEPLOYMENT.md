@@ -112,7 +112,7 @@ data/<数据目录>/
 │   ├── anchor-task.json
 │   ├── anchor-references/
 │   ├── generated/<run_id>/
-│   └── selected/             # promote 的精选图
+│   └── *.jpg                 # 上传 / promote 的正式图
 ├── tasks/                    # Video 任务配置（支持同一目录多个任务）
 │   ├── 唱歌版.json
 │   └── 跳舞版.json

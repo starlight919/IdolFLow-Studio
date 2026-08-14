@@ -171,7 +171,7 @@ data/<数据目录>/
 │   ├── anchor-task.json     # Anchor 任务配置
 │   ├── anchor-references/   # Anchor 参考图片
 │   ├── generated/<run_id>/  # 生成的候选图
-│   └── selected/            # promote 后的精选图（Video 任务从这里选 anchor 图）
+│   └── *.jpg                # 上传 / promote 后的正式图（Video 任务从这里选 anchor 图）
 ├── references/              # 参考音视频（视频 + 音频统一落点）
 ├── tasks/                   # Video 任务配置（支持同一目录多个任务）
 │   ├── 唱歌版.json
@@ -195,7 +195,7 @@ runtime/outputs/.web-runs/
 
 ### 方法 1: Web 界面下载
 - 在 Web 界面点击"下载"按钮
-- 自动命名为：`<任务名>_<Anchor>_<参考>_<变体>_candidate-XX.mp4`
+- 自动命名为：`<数据目录>__<任务名>_<Anchor>_<参考>_<变体>_candidate-XX.mp4`（含数据目录与任务名，中文保留）
 
 ### 方法 2: 直接复制文件
 ```bash
@@ -257,12 +257,10 @@ A:
 - `final.mp4` 是经过后处理的最终版本（如音频回灌）
 - **使用 final.mp4 即可**
 
-### Q: 如何只下载审核通过的视频？
+### Q: 如何只下载想要的视频？
 A: 
-1. 在 Web 界面对候选投票或标记
-2. 投票信息保存在 `review_state.json`
-3. 然后根据投票结果手动筛选下载
-4. 或使用"Promote"功能将选中的视频复制到特定目录
+- 在 Web 审核页中，每个候选视频用浏览器原生播放器播放，右键或播放器控制栏即可保存到本地
+- 候选视频文件位于 `runtime/outputs/<数据目录>/<运行ID>/<anchor>/<候选>/final.mp4`，也可直接按需拷贝
 
 ### Q: 视频生成失败后会有文件吗？
 A: 
