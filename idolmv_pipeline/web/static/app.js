@@ -21,7 +21,7 @@ import {
   // Review
 } from './modules/anchor.js';
 import {
-  taskFolderRelative, checkTaskFolderEmpty, updateUploadState, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
+  taskFolderRelative, checkTaskFolderEmpty, updateUploadState, scrollToUpload, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets,
@@ -368,8 +368,9 @@ Object.assign(window, {
   openAssetPicker, closeAssetPicker, browseAssets, toggleAsset, confirmAssetSelection,
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
+  scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
   saveTask, loadTasks, editTask, deleteTask, resetForm, showAssets, closeAssets,
-  confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction,
+  confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,

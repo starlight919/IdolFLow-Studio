@@ -92,6 +92,27 @@ export function updateUploadState() {
   if (uploadFile) uploadFile.disabled = !hasDir;
 }
 
+// 空目录提示里的「去上传」：滚动到上传素材区并高亮
+export function scrollToUpload() {
+  const row = $('.upload-row');
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1600);
+  }
+}
+
+// 空目录提示里的「去现场生成」：切到现场生成说明区块并滚动到 Anchor 字段
+export function goGenerateAnchor() {
+  window.setAnchorSource?.('generate');
+  const anchorLabel = [...document.querySelectorAll('.fields > label')].find((l) => l.textContent.includes('Anchor 文件'));
+  if (anchorLabel) {
+    anchorLabel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    anchorLabel.classList.add('flash');
+    setTimeout(() => anchorLabel.classList.remove('flash'), 1600);
+  }
+}
+
 // ── Preview Helpers ─────────────────────────────────────────────────────────
 
 function previewPath(file) {
@@ -343,21 +364,34 @@ export async function chooseFolder() {
   const newPath = store.folderPath || '';
   const oldPath = $(inputId).value.trim();
 
-  // 切换任务文件夹时，若已选素材（anchor/音视频）属于旧目录，需清空并提醒确认
+  // 切换任务文件夹时，若已填素材/歌词/约束，需清空并提醒确认
   if (inputId === '#task-dir' && newPath !== oldPath) {
-    const hasSelected = [lines('#anchors'), lines('#references'), lines('#audio-refs')].some((a) => a.length > 0);
+    const hasSelected =
+      lines('#anchors').length > 0 ||
+      lines('#references').length > 0 ||
+      lines('#audio-refs').length > 0 ||
+      !!($('#lyrics')?.value.trim()) ||
+      !!($('#constraints')?.value.trim());
     if (hasSelected) {
-      const ok = confirm(`切换任务文件夹将清空已选的 Anchor 图片和参考音视频。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」\n\n是否继续？`);
+      const ok = await window.showDeleteConfirm({
+        title: '切换任务文件夹',
+        desc: `切换将清空已选的 Anchor 图片、参考音视频、歌词和附加约束。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」`,
+        showFileOption: false,
+        confirmText: '确认切换',
+        danger: false,
+      });
       if (!ok) {
         store.folderPickerTarget = null;
         closeFolderPicker();
-        return;  // 用户取消，保持原目录和已选素材不变
+        return;  // 用户取消，保持原目录和已填内容不变
       }
     }
-    // 清空上一个文件夹残留的素材
+    // 清空上一个文件夹残留的素材、歌词和约束
     $('#anchors').value = '';
     $('#references').value = '';
     $('#audio-refs').value = '';
+    if ($('#lyrics')) $('#lyrics').value = '';
+    if ($('#constraints')) $('#constraints').value = '';
     renderVideoAssetPreviews();
   }
 
