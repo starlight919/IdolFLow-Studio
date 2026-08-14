@@ -86,6 +86,24 @@ bash scripts/start-pinggy.sh
 
 它暴露工作台网页。Seedance 提交时还会按需启动独立素材隧道，让远程 API 拉取 Anchor 和参考视频；两者用途和端口不同。
 
+素材隧道支持多种方案，通过 `--provider {auto,pinggy,ngrok}` 选择（默认 `auto`）：
+
+- **Pinggy**：需配置 `PINGGY_TOKEN`。URL 稳定性取决于账号类型：免费版为随机 URL 且限时 60 分钟，付费版为固定 URL 且更稳定。
+- **ngrok**：需先安装 `ngrok` 并配置 `NGROK_AUTHTOKEN`。多平台安装：
+  ```bash
+  # macOS / Linux 通用（官方脚本，不依赖 Homebrew）
+  curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok-agent.sh | bash
+  # 或 macOS: brew install ngrok
+  # 配置 token
+  ngrok config add-authtoken <YOUR_TOKEN>
+  ```
+- **auto**：优先 Pinggy（重试 3 次），失败后自动回退 ngrok；两者均失败才报错。
+
+```bash
+python run.py video tunnel start --provider auto      # 默认
+python run.py video run --task <id> --provider ngrok  # 本次运行强制 ngrok
+```
+
 ## 目录与持久化
 
 ```text

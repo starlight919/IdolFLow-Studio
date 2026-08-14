@@ -50,8 +50,13 @@ fi
 export VIDEO_PROJECT_ROOT="$ROOT"
 export VIDEO_WORKSPACE_CONFIG="$ROOT/video-workspace.json"
 
-# 确保 ffmpeg/ffprobe 在 PATH 中（macOS 上默认在 /usr/local/bin）
-export PATH="/usr/local/bin:$PATH"
+# 确保 ffmpeg/ffprobe 在 PATH 中（兼容 Intel / Apple Silicon Homebrew 路径）
+for _bindir in /usr/local/bin /opt/homebrew/bin; do
+  if [[ -d "$_bindir" && ":${PATH:-}:" != *":$_bindir:"* ]]; then
+    export PATH="$_bindir:$PATH"
+  fi
+done
+unset _bindir
 
 echo "🚀 启动 IdolFlow Studio (后台模式)..."
 echo ""

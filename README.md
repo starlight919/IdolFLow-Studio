@@ -29,20 +29,72 @@ brew install python ffmpeg openssh
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv ffmpeg openssh-client
+sudo apt-get install -y python3 python3-pip python3-venv ffmpeg openssh-client
 ```
 
-> 💡 **国内镜像加速**：macOS 上 Homebrew 下载慢时，可替换为清华/中科大镜像源（编辑 `~/.zprofile` 或 `~/.bash_profile`）：
->
-> ```bash
-> # 清华 Homebrew 镜像
-> export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
-> export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
-> export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
-> export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
-> ```
->
-> Python 依赖（`pip`）加速：安装时用 `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash setup.sh`，setup.sh 会自动用该镜像安装依赖。
+<details>
+<summary>💡 国内镜像加速（网络慢时）</summary>
+
+macOS 上 Homebrew 下载慢时，可替换为清华镜像源（编辑 `~/.zprofile` 或 `~/.bash_profile`）：
+
+```bash
+export HOMEBREW_API_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api"
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git"
+export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git"
+```
+
+Python 依赖（`pip`）加速：
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash setup.sh
+```
+
+</details>
+
+<details>
+<summary>其他 Linux 发行版</summary>
+
+**Fedora/RHEL**：
+
+```bash
+sudo dnf install -y python3 python3-pip ffmpeg openssh-clients
+```
+
+**CentOS**：
+
+```bash
+sudo yum install -y epel-release
+sudo yum install -y python3 python3-pip ffmpeg openssh-clients
+```
+
+**Arch Linux**：
+
+```bash
+sudo pacman -S python python-pip ffmpeg openssh
+```
+
+</details>
+
+> 💡 也可直接运行 `bash setup.sh`，脚本会自动检测操作系统并给出对应的依赖安装命令。
+
+<details>
+<summary>🔧 可选依赖：ngrok（素材隧道回退用）</summary>
+
+`ngrok` 作为 Pinggy 失败时的回退方案，非必需。运行 `bash setup.sh` 时会自动检查并提示。任选一种安装方式：
+
+```bash
+# macOS / Linux 通用（官方脚本，自动识别架构，不依赖 Homebrew）
+curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok-agent.sh | bash
+
+# 或 macOS 用 Homebrew
+brew install ngrok
+
+# 配置 token（也可直接在 .env 填 NGROK_AUTHTOKEN）
+ngrok config add-authtoken <YOUR_TOKEN>
+```
+
+</details>
 
 ### 2. 准备环境变量
 
@@ -66,7 +118,14 @@ VIDEO_SUBMIT_HASH=<用 scripts/gen_password.py 生成>
 
 `.env` 不进入 Git，需要通过安全渠道在机器间单独交接。
 
-> 🔐 **提交密码**：`VIDEO_SUBMIT_SECRET` 和 `VIDEO_SUBMIT_HASH` 用 `python3 scripts/gen_password.py <密码>` 生成。`.env` 不存明文密码，只存盐+哈希。启动生成时输入密码用于防误触、防没有 `.env` 权限的人乱点消耗额度。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#提交密码机制防误触防外人)。
+<details>
+<summary>🔐 提交密码机制（防误触 / 防外人）</summary>
+
+`VIDEO_SUBMIT_SECRET` 和 `VIDEO_SUBMIT_HASH` 用 `python3 scripts/gen_password.py <密码>` 生成。`.env` 不存明文密码，只存盐+哈希。启动生成时输入密码用于防误触、防没有 `.env` 权限的人乱点消耗额度。
+
+详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#提交密码机制防误触防外人)。
+
+</details>
 
 ### 3. 安装 Python 环境
 
@@ -93,18 +152,28 @@ http://127.0.0.1:8913
 bash scripts/start.sh --host 0.0.0.0 --port 8913
 ```
 
-## Pinggy 隧道（自动按需启动）
+## 素材隧道（自动按需启动，多方案可回退）
 
-**无需手动启动 Pinggy**。隧道逻辑已集成到服务中：
+**无需手动启动隧道**。隧道逻辑已集成到服务中，用于上传素材给 Seedance（`CreateAsset`）时暴露文件 URL：
 
-- **按需启动**：仅在上传素材给 Seedance（`CreateAsset`）时才自动启动隧道，让 Seedance 能访问你的文件 URL
-- **自动复用**：同一会话内隧道状态会被缓存复用，不会每次重复建连
-- **自动重建**：隧道失效（Pinggy 服务端重启/断连）时自动检测并重建，上传失败会重试（最多 3 次）
+- **按需启动**：仅在上传素材时才自动启动隧道，让 Seedance 能访问文件 URL
+- **自动复用**：同一会话内隧道状态缓存复用，不会每次重复建连
+- **自动重建**：隧道失效时自动检测并重建，上传失败会重试
 - **用完即弃**：素材上传完成后，submit 用 `asset://` 引用，不再依赖隧道
 
-**唯一前提**：在 `.env` 中正确配置 `PINGGY_TOKEN`。之后整个上传流程全程无需手动干预。
+**隧道方案**（通过 `--provider {auto,pinggy,ngrok}` 选择，默认 `auto`）：
 
-> 📄 传输与上传失败重试详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md#素材上传)
+| 方案 | 要求 | 说明 |
+|------|------|------|
+| Pinggy | `.env` 配 `PINGGY_TOKEN` | URL 稳定性取决于账号类型：免费版为随机 URL 且限时 60 分钟，付费版为固定 URL 且更稳定 |
+| ngrok | 安装 `ngrok` + 配 `NGROK_AUTHTOKEN` | 作为 Pinggy 失败时的回退方案 |
+
+- **auto**（默认）：优先 Pinggy（重试 3 次），失败后自动回退 ngrok；两者均失败时汇总报错并给出安装指引。
+- 也可显式指定：`python run.py video run --task <id> --provider ngrok`
+
+**前提**：至少配置一种方案（`.env` 的 `PINGGY_TOKEN`，或安装并配置 ngrok）。否则隧道启动会给出明确的失败原因与安装指引。
+
+> 📄 传输与上传失败重试详见 [docs/guides/Video_Task_Workflow.md](docs/guides/Video_Task_Workflow.md#素材上传)；隧道方案与回退详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#公网入口与素材隧道)
 
 ## 停止服务
 

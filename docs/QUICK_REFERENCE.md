@@ -141,14 +141,24 @@ grep VIDEO_SUBMIT_HASH .env
 bash scripts/stop.sh && bash scripts/start-daemon.sh
 ```
 
-### Pinggy tunnel 启动失败
-```bash
-# 确认 token 已配置
-grep PINGGY_TOKEN .env
+### 素材隧道启动失败
+素材隧道（上传素材给 Seedance 用，端口 8906）支持 `--provider {auto,pinggy,ngrok}`（默认 `auto`）。`auto` 会先尝试 Pinggy（重试 3 次），失败后自动回退到 ngrok。
 
-# 手动测试 Pinggy
-ssh -p 443 -R0:localhost:8913 -L4300:localhost:4300 a.pinggy.io
+```bash
+# 指定仅用 ngrok（需先安装 ngrok 并配置 NGROK_AUTHTOKEN，见 README）
+python run.py video tunnel start --provider ngrok
+
+# 指定仅用 pinggy
+python run.py video tunnel start --provider pinggy
+
+# 确认 token 已配置
+grep -E "PINGGY_TOKEN|NGROK_AUTHTOKEN" .env
+
+# 手动测试 Pinggy 素材隧道（需带 token）
+ssh -p 443 -R0:localhost:8906 <PINGGY_TOKEN>@a.pinggy.io
 ```
+
+> 工作台网页的公网隧道（端口 8913）由 `bash scripts/start-pinggy.sh` 单独管理，与素材隧道（8906）用途和端口不同。
 
 ### 找不到生成的视频
 ```bash
@@ -295,6 +305,5 @@ find runtime/outputs/${TASK_ID}/${RUN_ID} -name "final.mp4" -exec cp {} ~/Downlo
 
 ---
 
-💾 **保存本文件到手机或打印出来，随时查阅！**
 
-最后更新：2026-08-13 (歌词时间戳、深浅色主题)
+最后更新：2026-08-14 (素材隧道多方案、目录约定)

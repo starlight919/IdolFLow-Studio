@@ -42,12 +42,75 @@ if (( ${#missing[@]} )); then
   echo ""
   echo "❌ 缺少系统依赖: ${missing[*]}"
   echo ""
-  echo "macOS 安装方法:"
-  echo "  brew install ffmpeg openssh"
-  echo ""
-  echo "Ubuntu/Debian 安装方法:"
-  echo "  sudo apt-get install ffmpeg openssh-client"
+  # 按操作系统给出对应的安装命令
+  case "$(uname -s)" in
+    Darwin)
+      echo "macOS 安装方法:"
+      echo "  brew install ffmpeg openssh"
+      ;;
+    Linux)
+      # 尝试识别具体发行版
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "Ubuntu/Debian 安装方法:"
+        echo "  sudo apt-get update && sudo apt-get install -y ffmpeg openssh-client"
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "Fedora/RHEL 安装方法:"
+        echo "  sudo dnf install -y ffmpeg openssh-clients"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "CentOS 安装方法:"
+        echo "  sudo yum install -y epel-release && sudo yum install -y ffmpeg openssh-clients"
+      elif command -v pacman >/dev/null 2>&1; then
+        echo "Arch Linux 安装方法:"
+        echo "  sudo pacman -S ffmpeg openssh"
+      else
+        echo "请手动安装: ffmpeg ffprobe openssh-client"
+      fi
+      ;;
+    *)
+      echo "请手动安装: ffmpeg ffprobe ssh"
+      ;;
+  esac
   exit 1
+fi
+
+echo ""
+
+# 检查 pip 是否可用（Debian/Ubuntu 可能需要单独安装 python3-pip）
+if ! python3 -m pip --version >/dev/null 2>&1; then
+  echo "❌ 错误: python3-pip 未安装" >&2
+  case "$(uname -s)" in
+    Darwin) echo "  macOS: 已随 Python 自带，或重装 python3" >&2 ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "  Ubuntu/Debian: sudo apt-get install -y python3-pip python3-venv" >&2
+      else
+        echo "  请手动安装 python3-pip" >&2
+      fi
+      ;;
+  esac
+  exit 1
+fi
+
+echo ""
+
+# 检查可选依赖：ngrok（素材隧道 fallback 用，缺失仅警告不阻断）
+echo "📌 检查可选依赖（素材隧道）..."
+if command -v ngrok >/dev/null 2>&1; then
+  echo "  ✅ ngrok（已安装，可作 Pinggy 失败时的回退方案）"
+else
+  echo "  ⚠️  ngrok 未安装（可选）。素材隧道默认用 Pinggy，失败时需 ngrok 回退。"
+  echo "      安装方法（多平台，不依赖 Homebrew）:"
+  echo ""
+  echo "        # macOS / Linux 通用（官方脚本，自动识别架构）"
+  echo "        curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok-agent.sh | bash"
+  echo ""
+  echo "        # 或 macOS 用 Homebrew"
+  echo "        brew install ngrok"
+  echo ""
+  echo "        # 或手动下载: https://ngrok.com/download"
+  echo ""
+  echo "      安装后配置 token（或直接在 .env 填 NGROK_AUTHTOKEN）:"
+  echo "        ngrok config add-authtoken <YOUR_TOKEN>"
 fi
 
 echo ""
@@ -89,13 +152,13 @@ if [[ ! -f .env ]]; then
   echo "     vi .env"
   echo ""
   echo "  3. 启动服务:"
-  echo "     ./start.sh"
+  echo "     bash scripts/start.sh"
 else
   echo "✅ .env 已配置"
   echo ""
   echo "启动服务:"
-  echo "  ./start.sh          # 前台运行"
-  echo "  ./start-daemon.sh   # 后台运行"
+  echo "  bash scripts/start.sh          # 前台运行"
+  echo "  bash scripts/start-daemon.sh   # 后台运行"
 fi
 
 echo ""

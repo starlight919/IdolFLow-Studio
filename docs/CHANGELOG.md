@@ -2,6 +2,26 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-14] - 素材隧道支持多方案与自动回退
+
+### 🔧 隧道 provider 可配置
+- 素材隧道真正支持 `--provider {auto,pinggy,ngrok}` 选择，`auto`（默认）优先 Pinggy（重试 3 次），失败后自动回退 ngrok
+- `_start_ngrok` 修复：检测 ngrok 是否安装（未安装给出明确提示）、自动注入 `NGROK_AUTHTOKEN`、URL 可达性校验
+- ngrok URL 提取改为从日志 stdout 正则解析（ngrok v3 的 4040 web API 因 `allow_hosts` 返回 502，不可靠）
+- `_reachable` 改用 `requests` 且超时提高到 15s（`urllib` 对 ngrok-free.dev 域名 SSL 握手超时；5s 易误判）
+- 隧道启动失败时汇总所有 provider 的失败原因，并给出安装/配置指引
+- Pinggy 需 `PINGGY_TOKEN`（URL 稳定性取决于账号类型：免费版随机且限时，付费版固定且稳定）；缺失 token 时给出明确提示而非静默失败
+- 隧道复用路径按已记录的 provider 重启，不再硬编码 Pinggy
+
+## [2026-08-14] - 环境兼容性改进
+
+### 🖥 多平台安装与启动兼容
+- `setup.sh` 系统依赖安装支持多发行版：macOS / Ubuntu / Debian / Fedora / RHEL / CentOS / Arch Linux
+- `setup.sh` 新增 `python3-pip` 缺失检查（Debian/Ubuntu 需单独安装），并修正结尾启动命令路径
+- `start-daemon.sh` 的 PATH 兼容 Intel / Apple Silicon Homebrew 路径（`/usr/local/bin` + `/opt/homebrew/bin`）
+- `start-pinggy.sh` 支持读取 `.env` 的 `PINGGY_TOKEN`（无 token 匿名模式不可用，缺失时明确报错）
+- ngrok 安装方式改为多平台（官方脚本，不依赖 Homebrew，兼容 macOS / Linux）
+
 ## [2026-08-14] - 素材目录统一约定与历史数据迁移
 
 ### 🗑 删除数据目录
