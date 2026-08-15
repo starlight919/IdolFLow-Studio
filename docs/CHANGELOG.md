@@ -2,6 +2,84 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-15] - Asset 面板源文件变化标记 / 可编辑 Prompt / 参考音视频预览 / 排序优化
+
+### ✍️ 可编辑 Prompt
+- 「预览 Prompt」由只读 `<pre>` 改为可直接编辑的 `<textarea>`：未编辑即自动模式（按七层架构自动生成，附加约束仍追加在末尾）；手动编辑即视为「自定义 Prompt」，保存/生成时整段使用用户文本，不再叠加歌词、时间戳、附加约束等自动拼接内容
+- 预览框顶部新增模式徽标（自动生成 / 自定义）+「恢复自动生成」按钮，一键放弃自定义回到系统生成版本
+- **引导文案优化**：模式徽标带悬浮说明；预览框下方提示条按当前模式动态显示——自动模式讲清「任务附加约束（追加小补）」与「直接编辑框（整段重写）」两种方式及二选一关系；自定义模式提示整段覆盖的后果与恢复方法
+- **「任务附加约束」重新定位为「追加小补」**：help-tip 明确它与预览框编辑的区别（追加末尾 vs 整段重写），placeholder 同步引导
+- **修复编辑预览框不切换自定义模式的 bug**：`markPromptEdited` / `resetPromptToAuto` 未加入 `Object.assign(window, …)`，inline `oninput` /「恢复自动生成」按钮失效，现补上
+- 后端 `VideoTaskAdapter` 新增 `custom_prompt` 字段：`adapter_from_task` 优先使用自定义 prompt，否则走 `build_prompt`；`store.validate` 在自定义时跳过 `build_prompt` 校验（用户文本无法程序校验）；`/api/prompt-preview` 识别 `custom_prompt` 直接回显
+- 前端 `formTask` 仅当用户在预览框手动编辑过（`store.customPromptDirty`）才提交 `custom_prompt`；编辑任务自动回填已保存的自定义 prompt
+
+### 🔀 任务排序交互优化
+- 主任务列表与 Anchor 任务列表的「单个三态排序按钮」拆分为四个独立按钮并列：`时间 ↓`（最新在前）/ `时间 ↑`（最早在前）/ `名字 A-Z` / `名字 Z-A`，点击即选中高亮（主题色），一眼看清当前排序
+- 排序逻辑新增 `name-desc`（名字字母降序）；state.js 注释同步
+
+### 📄 文档
+- `Prompt_Design.md` 升至 V2.3，新增「13.1 可编辑 Prompt（自定义覆盖）」
+- `Video_Task_Workflow.md` 补充 `custom_prompt` 可选字段说明
+- **参考音频三种输入场景说明**：`Asset_Design.md` 升至 V1.1，§4.1 新增三种输入场景（① 视频+视频提取音频、② 纯音频、③ 视频+独立音频=不提供）的来源/处理/提交差异表，说明传视频时音频以视频提取为准、音频 tab 独立音频被覆盖的切换边界；`Video_Task_Workflow.md`、`Singing_Video_Guide.md` 同步补充
+- **修复「视频 + 独立音频」被前端误填充**：`formTask` 视频分支去掉 `audio_file` 生成，传视频时音频恒从视频提取；`switchRefTab` 切到视频 tab 时若音频 tab 有残留音频给出 toast 提示「将被视频提取音频覆盖」，避免两类音频来源混淆
+
+### 🔊 参考音视频点击预览
+- 「素材 → 参考音视频」缩略图支持点击预览：**音频**（♪ 图标）点击弹出 lightbox 内嵌 `<audio controls autoplay>` 播放器；**视频**缩略图点击弹出 `<video controls>` 播放器（此前视频仅静音缩略图、音频无任何播放能力）
+- 复用并扩展原有图片 lightbox 为通用媒体预览：`#lightbox-media` 按类型动态渲染 img / audio / video；点击遮罩背景关闭，点击播放器本体不关闭（可操作进度条等）；关闭时自动暂停并清空媒体
+- 修复点击缩略图误触操作控件：预览委托排除 `.asset-remove` / `.chip-remove`，删除按钮仍正常响应
+- **修复点击缩略图意外跳 tab**：素材缩略图位于 `<label>` 内，浏览器默认行为会激活 label 内第一个按钮（"Anchor 文件"→"现场生成"、"参考音视频"→"📹 视频"），导致点击图片跳「现场生成」tab、点击音频跳「视频」tab；现预览委托对缩略图点击统一 `preventDefault() + stopPropagation()`，彻底阻断该默认激活
+- **修复 lightbox 图片不能再点关闭**：图片预览恢复「点击图片本身关闭」的 toggle 习惯；音频/视频播放器本体点击不关闭（便于操作进度条），仅点击遮罩背景/空白处关闭
+- 后端 `file-preview` 已支持 Range/206 流式播放，音频可拖进度条
+
+### 📦 Asset 面板源文件变化标记
+- **核心改进**：让用户清楚看到哪些素材会被自动重传、哪些会复用。素材上传采用文件指纹（`path + size + mtime_ns`）实现自动复用，但用户难以直观判断"我编辑了源文件后，下次提交会不会重传"
+- 后端 `_task_assets` 接口扩展：对比"当前源文件指纹"与"上次 prepare 时的源文件指纹"，返回 `current_source`（当前指纹）和 `changed`（是否变化）
+  - **Anchor 图片**：缓存 `__source` 即源图指纹，直接对比源图
+  - **视频切片 / 音频**：读取 prepare 写入的 marker 文件（`segment_XX.src.json` / `audio.src.json`），用其中的源文件指纹与当前源文件对比
+- 前端 Asset 面板为每个素材增加状态徽标：
+  - 🟢 `✓ 指纹未变 · 将复用`（绿色，正常复用已上传的 Seedance 资源）
+  - 🟠 `⚠️ 源文件已修改 · 下次提交将重新上传`（橙色 + 行高亮 + 左侧橙色边线，提示用户这个素材会被自动重新上传）
+- 每行额外展示源文件名、大小、最后修改时间（`MM-DD HH:mm`），用户一眼看清编辑时间
+- 顶部说明文字更新，讲清自动复用、自动重传、手动 🗑 强制刷新三种场景的区别
+
+### 🛠 Asset 产物缓存修复（Phase 1：Artifact Signature）
+- **修复更换对齐策略（pad_mode）产物不重建的 bug**：原 prepare 的缓存判断只看源文件指纹，更换 pad_mode/split/crop 等处理参数而源文件未变时，产物（`audio_padded.mp3`、`segment_XX.mp4`）不重建，asset 复用旧版本，导致生成视频时长/对齐与用户所选不符
+- **引入 Artifact Signature**：产物缓存签名 = `hash(源文件指纹 + 处理参数 transform + 处理器版本)`，任一变化 → 产物重建 → asset 自动重传
+  - `_artifact_signature()` / `_read_signature()` / `_write_marker()` 辅助函数 + `_PROCESSOR_VERSION=2`
+  - 音频补齐 `audio_padded`：签名含 `pad_mode` / `seedance_duration`，marker 升级为 `audio_padded.src.json`
+  - 视频切片 `segment_XX`：签名含 `start` / `duration` / `crop_filter` / `pad_mode` / `original_duration`
+  - `audio.mp3` 缓存判断保持原状（内容只取决于源文件）
+- **向后兼容**：旧格式 marker（仅源指纹）首次会被识别为不匹配 → 重建一次后写入新格式
+- **已验证**：签名逻辑（pad_mode back≠front）、幂等（重复跑不重建）、修复生效（pad_mode none→back 触发重建）
+- 详细机制与设计见 [guides/Asset_Design.md](guides/Asset_Design.md)
+
+### 🧭 Asset 统一决策引擎（Phase 2：Planner）
+- 实现 `AssetPlanner` 统一决策引擎，作为 Runner 与后端 Status API 的**单一决策来源**（设计见 `Asset_Design.md` §7）
+- 新增 `video_tasks/planner.py`：
+  - `AssetDecision` / `InspectedMaterial` 输入结构
+  - ReasonCode：CACHE_HIT / FIRST_UPLOAD / SOURCE_CHANGED / TRANSFORM_CHANGED / SOURCE_MISSING_REMOTE_REUSE / SOURCE_REQUIRED_FOR_REBUILD / REMOTE_ASSET_OPAQUE 等
+  - `plan_material()` 决策矩阵：REUSE_REMOTE / UPLOAD_EXISTING_ARTIFACT / BUILD_AND_UPLOAD / NEED_SOURCE_FOR_REBUILD / NEED_MATERIAL_REBIND
+- `runner.py`：`upload()` 重构为 **plan → 阻断检查 → prepare(需要时) → 按 action 上传**；新增 `_resolve_transform` / `_inspect_anchor` / `_inspect_reference` / `_inspect_audio` / `_plan_all`；上传成功写入 `__transform`
+- `web/handlers.py _task_assets`：改为调用 `_plan_all` 返回统一 Planner Decision（action/reason/各 state/can_submit/block_reason/transform），消除"UI 显示复用、Runner 实际失败"的不一致
+- 前端 Asset 面板 `showAssets`：按 action/reason 渲染状态徽标（🔄 将重新生成并上传 / ✓ 复用已上传资源 / ⚠️ 需重新选择等），废弃旧 `changed` 指纹判断
+- **已验证**：planner 9 决策场景符合设计矩阵；源文件未变→REUSE 复用、touch 源文件→BUILD_AND_UPLOAD 重传；源删除→NEED_MATERIAL_REBIND 阻断；Status API 返回完整 Decision；面板正确渲染
+- **⚠️ 验证中发现并修复 2 个真实 bug**：
+  1. **Status API 源删除时返回 error**：`adapter_from_task` 的 `store.validate` 会校验素材文件存在，源缺失时抛 `missing asset`，导致 Asset 面板在源删除时无法显示状态。修复：`adapter_from_task` 新增 `skip_material_check` 参数，Status API 传 `True` 跳过素材文件校验（`store.validate` 增加 `check_materials`），让面板能展示"素材缺失"状态。
+  2. **lip_sync 无歌词任务 Status API 报错**：`adapter_from_task` 在构造 prompt 时直接调 `build_prompt`，lip_sync 无歌词抛错，导致 Asset 面板打不开该任务。修复：`skip_material_check=True` 时跳过 prompt 构造（只展示素材状态），同时 `store.validate` 用 `strict=False` 跳过生成期校验。
+- **⚠️ 修复「旧资产误判为全部重传」**：Phase 2 引入 `__transform` 后，旧资产（无 `__transform`）会被判定重传，且 `_fingerprint` 含 path 导致源图移动位置（如 `anchors/selected/` → `anchors/`）被误判为"已修改"
+  - 新增 `_fingerprint_content_same`：指纹比较忽略 path，只看 `size + mtime_ns`（同一文件移动到不同路径不视为已修改）
+  - `_inspect_anchor` / `_inspect_reference`：旧资产（有 `__source` 无 `__transform`）且源/产物指纹一致时，兜底 `asset_transform = desired`，避免误判重传
+  - `plan_material`：有源分支在 `artifact` 不匹配时，若 `asset_transform` 匹配（含兜底）仍判定 `REUSE_REMOTE` 复用
+  - **验证**：跳舞（4 anchor + 切片误判重传）→ 修复后全部复用，仅剩从未上传过的音频首次上传；冻结/偶尔全部复用；真实替换过的 anchor（size 变化）正确重传
+- **注**：源缺失复用（Snapshot + Remote Only）为后续方向；当前源缺失时 planner 判定阻断（需重选），见 `Asset_Design.md` §11 边界 1
+
+### 💾 时长对齐（pad_mode）改动强制选择保存方式
+- 编辑已有任务时若改了「时长对齐」，保存时**强制弹出「保存方式」二选一**（保存为新任务 / 更新原任务 / 取消），并推荐保存为新任务：对齐方式会影响产物重建，保留原任务可避免覆盖
+- 弹窗文案带具体变化（从「原始时长」改成「后补齐」等）；保存成功后同步原始 pad_mode，避免后续保存重复弹窗
+- 复用现有 `showSaveModeDialog` 交互，`showSaveModeDialog` 支持 `reason='padMode'` 场景；state 新增 `originalPadMode` 记录编辑回填的原始对齐方式
+
+---
+
 ## [2026-08-14] - Anchor 页面与逻辑完善
 
 ### 🖥 Anchor 前端

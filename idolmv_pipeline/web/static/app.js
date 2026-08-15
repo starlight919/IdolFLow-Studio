@@ -26,7 +26,7 @@ import {
   browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
-  closeAssets, previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
+  closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
@@ -363,7 +363,7 @@ Object.assign(window, {
   scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
   saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
-  previewPrompt, closePromptPreview, requestStart, startCurrent, closeModal, confirmStart,
+  previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
   uploadAsset, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,
   // Lightbox
@@ -453,40 +453,96 @@ function setupModalAccessibility() {
   });
 }
 
-// ── 图片放大预览 Lightbox ────────────────────────────────────────────────────
+// ── 媒体预览 Lightbox（图片 / 音频 / 视频）───────────────────────────────────
 // 覆盖主页面素材图（#anchor-file-previews / #reference-file-previews）、
 // Anchor 参考图卡片、asset picker 缩略图。用捕获阶段委托，以便在
-// Anchor 参考图卡片的 inline onclick（toggleRefExpand，冒泡阶段）之前拦截图片点击。
+// Anchor 参考图卡片的 inline onclick（toggleRefExpand，冒泡阶段）之前拦截点击。
 function setupImageLightbox() {
-  // 点击遮罩或图片本身都关闭（toggle 交互）；阻止冒泡，避免关闭后触发其他委托逻辑
+  // 点击遮罩背景关闭；图片本身也可点关闭（toggle 习惯）；
+  // 音频/视频播放器本体不关闭（便于操作进度条等控件）。
+  // 阻止冒泡，避免关闭后触发其他委托逻辑。
   const boxEl = $('#image-lightbox');
   if (boxEl) {
     boxEl.addEventListener('click', (e) => {
       e.stopPropagation();
-      closeImageLightbox();
+      const t = e.target;
+      // 图片本身可点关闭（toggle 习惯）；
+      // 音频/视频播放器本体（.lightbox-audio/.lightbox-video）不关闭，便于操作进度条等控件；
+      // 点击遮罩背景或 .lightbox-media 空白处也关闭。
+      const clickOnImg = t.classList?.contains('lightbox-img');
+      const clickOnPlayer = t.classList?.contains('lightbox-audio') || t.classList?.contains('lightbox-video');
+      const clickOnBackdrop = t === boxEl || t.classList?.contains('lightbox-media') || t.id === 'lightbox-caption';
+      if (!clickOnPlayer && (clickOnBackdrop || clickOnImg)) {
+        closeImageLightbox();
+      }
     });
   }
   document.addEventListener('click', (e) => {
-    const img = e.target.closest('.asset-figure img, .file-thumb, .reference-thumb, .anchor-review-card img');
-    if (!img) return;
+    const target = e.target;
+    // 点击删除按钮（✕）等操作控件时，不触发预览
+    if (target.closest('.asset-remove, .chip-remove, .lightbox-close')) return;
     // Anchor 参考图卡片的缩略图点击仅放大，不触发展开/收起
-    if (img.classList.contains('reference-thumb')) {
-      e.stopPropagation();
-      openImageLightbox(img.currentSrc || img.src, '点击空白处或按 ESC 关闭');
+    const refThumb = target.closest('.reference-thumb');
+    if (refThumb) {
+      e.preventDefault(); e.stopPropagation();
+      openImageLightbox(refThumb.currentSrc || refThumb.src, '点击空白处或按 ESC 关闭');
       return;
     }
-    // 主页面 / picker / 审核缩略图：直接放大
+    // 音频缩略图（♪ 图标或其所在卡片）
+    const audioFig = target.closest('.asset-figure.asset-audio, .asset-audio-icon');
+    if (audioFig) {
+      // preventDefault 阻止 <label> 包裹导致点击缩略图默认激活其内第一个按钮（如"现场生成"/"视频"tab）
+      e.preventDefault(); e.stopPropagation();
+      const fig = audioFig.classList.contains('asset-audio-icon') ? audioFig.closest('.asset-figure') : audioFig;
+      const file = fig?.dataset.file;
+      if (file) openMediaLightbox('audio', file, fig?.querySelector('figcaption')?.textContent?.trim() || '');
+      return;
+    }
+    // 视频缩略图（<video> 元素或其父级）
+    const vid = target.closest('.asset-figure video');
+    if (vid) {
+      e.preventDefault(); e.stopPropagation();
+      const fig = vid.closest('.asset-figure');
+      const file = fig?.dataset.file;
+      if (file) openMediaLightbox('video', file, fig?.querySelector('figcaption')?.textContent?.trim() || '');
+      return;
+    }
+    // 图片缩略图
+    const img = target.closest('.asset-figure img, .file-thumb, .anchor-review-card img');
+    if (!img) return;
+    e.preventDefault(); e.stopPropagation();
     const figcap = img.closest('figcaption');
     const meta = img.closest('.review-meta')?.textContent?.trim();
     openImageLightbox(img.currentSrc || img.src, figcap?.textContent?.trim() || meta || '');
   }, true); // capture=true 提前拦截
 }
 
+function _mediaPreviewUrl(file) {
+  // file 是相对 data_root 的路径，与预览缩略图同一接口
+  return `/api/file-preview?root=data_root&path=${encodeURIComponent(file)}`;
+}
+
 function openImageLightbox(src, caption = '') {
+  const mediaEl = $('#lightbox-media');
+  if (!mediaEl || !src) return;
+  mediaEl.innerHTML = `<img src="${src}" alt="" draggable="false" class="lightbox-img">`;
+  _showLightbox(caption);
+}
+
+// 打开音频/视频预览：type = 'audio' | 'video'，file 为相对 data_root 路径
+function openMediaLightbox(type, file, caption = '') {
+  const mediaEl = $('#lightbox-media');
+  if (!mediaEl || !file) return;
+  const url = _mediaPreviewUrl(file);
+  const controls = type === 'video' ? 'controls' : 'controls autoplay';
+  const tag = type === 'video' ? 'video' : 'audio';
+  mediaEl.innerHTML = `<${tag} class="lightbox-${type}" src="${url}" ${controls} preload="metadata"></${tag}>`;
+  _showLightbox(caption);
+}
+
+function _showLightbox(caption = '') {
   const box = $('#image-lightbox');
-  const img = $('#lightbox-img');
-  if (!box || !img || !src) return;
-  img.src = src;
+  if (!box) return;
   const cap = $('#lightbox-caption');
   if (cap) cap.textContent = caption;
   box.hidden = false;
@@ -494,10 +550,14 @@ function openImageLightbox(src, caption = '') {
 
 function closeImageLightbox() {
   const box = $('#image-lightbox');
-  if (box) {
-    box.hidden = true;
-    const img = $('#lightbox-img');
-    if (img) img.src = '';
+  if (!box) return;
+  box.hidden = true;
+  const mediaEl = $('#lightbox-media');
+  if (mediaEl) {
+    // 停止音频/视频播放
+    const media = mediaEl.querySelector('audio, video');
+    if (media) { try { media.pause(); } catch {} }
+    mediaEl.innerHTML = '';
   }
 }
 

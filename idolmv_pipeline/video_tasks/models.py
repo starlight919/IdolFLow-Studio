@@ -101,6 +101,7 @@ class VideoTaskAdapter:
     watermark: bool = False
     output_format: str = "mp4"
     camera_policy: CameraPolicy | None = None
+    custom_prompt: str | None = None
     source_root: Path = DEFAULT_DATA_ROOT
     task_path: Path | None = None
     work_path: Path | None = None

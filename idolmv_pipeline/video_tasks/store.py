@@ -153,7 +153,7 @@ class TaskStore:
 
     # ── validation ────────────────────────────────────────────────────────
 
-    def validate(self, task: dict, require_anchors: bool = True, strict: bool = True) -> dict:
+    def validate(self, task: dict, require_anchors: bool = True, strict: bool = True, check_materials: bool = True) -> dict:
         name = str(task.get("name", "")).strip()
         if not name:
             raise ValueError("task name is required")
@@ -175,7 +175,8 @@ class TaskStore:
 
         actual_task_dir = self.task_dir(data_dir, task_dir_override)
         # resume 轮询时不需要 anchors（提交阶段才用），仅校验 references（后处理需要）
-        required = (anchors if require_anchors else []) + references
+        # check_materials=False：Status API 需要展示"素材缺失"状态，不能因缺失而失败
+        required = (anchors if require_anchors else []) + references if check_materials else []
         for item in required:
             file = str(item.get("file", ""))
             if not file or not self._asset_path(actual_task_dir, file).is_file():
@@ -189,7 +190,9 @@ class TaskStore:
                 raise ValueError(f"missing lyrics: {lyrics_file}")
             lyrics = path.read_text().strip()
         # 保存草稿（strict=False）时不校验歌词等生成期约束，仅在生成（strict=True）时严格校验
-        if strict:
+        # 自定义 prompt：整段由用户提供，无法程序校验，跳过 build_prompt
+        custom_prompt = str(task.get("custom_prompt", "")).strip()
+        if strict and not custom_prompt:
             has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
             camera_policy = task.get("camera_policy")
             build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))

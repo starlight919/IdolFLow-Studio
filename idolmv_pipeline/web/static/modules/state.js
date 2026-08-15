@@ -14,7 +14,9 @@ const store = {
   currentTask: null,
   pendingTask: null,
   pendingLyricsTimestamps: null,
-  taskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name'
+  taskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
+  customPromptDirty: false,  // 预览 Prompt 是否被用户手动编辑过（true=自定义）
+  originalPadMode: null,  // 编辑任务时回填的原始 pad_mode，用于检测用户改动（null=新建）
 
   // ========== Asset Picker ==========
   assetPickerCategory: '',
@@ -40,7 +42,7 @@ const store = {
   pendingAnchorTask: null,
   anchorPickerMode: false,
   currentAnchorTask: null,
-  anchorTaskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name'
+  anchorTaskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
 
   // ========== Review ==========
   reviewManifest: null,

@@ -498,10 +498,12 @@ export async function chooseFolder() {
       lines('#audio-refs').length > 0 ||
       !!($('#lyrics')?.value.trim()) ||
       !!($('#constraints')?.value.trim());
-    if (hasSelected) {
+    const promptTA = $('#prompt-preview');
+    const hasCustomPrompt = store.customPromptDirty && (promptTA?.value || '').trim();
+    if (hasSelected || hasCustomPrompt) {
       const ok = await window.showDeleteConfirm({
         title: '切换任务文件夹',
-        desc: `切换将清空已选的 Anchor 图片、参考音视频、歌词和附加约束。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」`,
+        desc: `切换将清空已选的 Anchor 图片、参考音视频、歌词、附加约束和自定义 Prompt。\n\n从「${oldPath || '(未设置)'}」切换到「${newPath || '(根目录)'}」`,
         showFileOption: false,
         confirmText: '确认切换',
         danger: false,
@@ -512,12 +514,15 @@ export async function chooseFolder() {
         return;  // 用户取消，保持原目录和已填内容不变
       }
     }
-    // 清空上一个文件夹残留的素材、歌词和约束
+    // 清空上一个文件夹残留的素材、歌词、约束和自定义 Prompt
     $('#anchors').value = '';
     $('#references').value = '';
     $('#audio-refs').value = '';
     if ($('#lyrics')) $('#lyrics').value = '';
     if ($('#constraints')) $('#constraints').value = '';
+    if (promptTA) promptTA.value = '';
+    store.customPromptDirty = false;
+    _updatePromptModeBadge();
     renderVideoAssetPreviews();
   }
 
@@ -591,7 +596,7 @@ export function formTask() {
           pad_mode: 'none',
         }));
       }
-      // 视频 tab：传视频，可选传音频（从视频提取）
+      // 视频 tab：传视频，音频一律从视频提取（音频 tab 选的独立音频不生效，会在此被覆盖）
       const padEl = document.getElementById('pad-mode');
       const passAudioEl = document.getElementById('pass-reference-audio');
       return videoRefs.map((file, i) => ({
@@ -601,11 +606,12 @@ export function formTask() {
         pass_reference_audio: passAudioEl?.checked ?? true,
         pass_reference_video: true,
         pad_mode: padEl?.value || 'none',
-        ...(audioRefs[i] ? { audio_file: audioRefs[i] } : {}),
       }));
     })(),
     lyrics: $('#lyrics').value.trim(),
     constraints: $('#constraints').value.trim(),
+    // 自定义 prompt：仅当用户在预览框手动编辑过才带上，否则后端自动生成
+    ...(_promptEdited() ? { custom_prompt: ($('#prompt-preview')?.value || '').trim() } : {}),
     lyrics_timestamps: store.currentTask?.lyrics_timestamps || store.pendingLyricsTimestamps || [],
     // 高级视频设置（默认值与后端 VideoTaskAdapter 一致）
     resolution: $('#video-resolution')?.value || '720p',
@@ -628,6 +634,11 @@ export function switchRefTab(tab) {
     if (padRow) padRow.style.display = '';
     // motion 模式不显示"传参考音频"
     if (passAudioWrap) passAudioWrap.style.display = mode === 'motion' ? 'none' : '';
+    // 用户在音频 tab 选过独立音频，切到视频 tab 后这些音频会被"从视频提取的音频"覆盖
+    const audioFiles = lines('#audio-refs');
+    if (audioFiles.length) {
+      toast(`⚠️ 音频 tab 中已选的 ${audioFiles.length} 个音频将被忽略：传参考视频时音频以视频提取为准`);
+    }
   } else {
     // 音频 tab：隐藏时长对齐 + "传参考音频"（选音频 tab 就是要传音频）
     if (padRow) padRow.style.display = 'none';
@@ -705,6 +716,12 @@ export async function saveTask(event, mode = 'auto') {
       showSaveModeDialog(data, editingId);
       return;
     }
+    // 编辑已有任务时改了「时长对齐（pad_mode）」：强制二选一（推荐新建）
+    const curPad = $('#pad-mode')?.value || 'none';
+    if (editingId && store.originalPadMode != null && curPad !== store.originalPadMode) {
+      showSaveModeDialog(data, editingId, 'padMode', { from: store.originalPadMode, to: curPad });
+      return;
+    }
     // 编辑同名任务（名字/文件夹未变）：视为更新
     if (editingId && editingId === newId) {
       mode = 'update';
@@ -737,12 +754,24 @@ async function _doSave(data, editingId, mode) {
   return await post('/api/tasks', data);
 }
 
-function showSaveModeDialog(data, editingId) {
+function showSaveModeDialog(data, editingId, reason = 'identity', extra = {}) {
+  const tName = escapeHtml(store.currentTask?.name || '');
+  let desc;
+  if (reason === 'padMode') {
+    const from = escapeHtml(PAD_MODE_NAMES[extra.from] || extra.from || '');
+    const to = escapeHtml(PAD_MODE_NAMES[extra.to] || extra.to || '');
+    desc = `你正在编辑已有任务 <strong>${tName}</strong>，并把「时长对齐」从 <strong>${from}</strong> 改成了 <strong>${to}</strong>。`
+      + `对齐方式会影响产物重建，建议保存为新任务以保留原任务。`;
+  } else {
+    desc = `你正在编辑已有任务 <strong>${tName}</strong>，但修改了名称或文件夹，这会导致创建新任务。`;
+  }
+  // padMode 弹窗保存成功后同步原始值，避免下次保存重复弹窗
+  const syncPadMode = () => { if (reason === 'padMode') store.originalPadMode = extra.to; };
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.innerHTML = `<div class="modal-card" style="max-width:400px">
     <h3>保存方式</h3>
-    <p>你正在编辑已有任务 <strong>${escapeHtml(store.currentTask?.name || '')}</strong>，但修改了名称或文件夹，这会导致创建新任务。</p>
+    <p>${desc}</p>
     <div class="actions" style="flex-direction:column;gap:8px">
       <button onclick="this.closest('.modal').remove(); window._saveAsNew?.()" style="width:100%">保存为新任务</button>
       <button class="secondary" onclick="this.closest('.modal').remove(); window._updateExisting?.()" style="width:100%">更新原任务</button>
@@ -756,6 +785,7 @@ function showSaveModeDialog(data, editingId) {
     try {
       const task = await _doSave(data, null, 'new');
       store.currentTask = task;
+      syncPadMode();
       toast('已保存为新任务');
       await loadTasks();
     } catch (e) { toast(e.message); }
@@ -764,6 +794,7 @@ function showSaveModeDialog(data, editingId) {
     try {
       const task = await _doSave(data, editingId, 'update');
       store.currentTask = task;
+      syncPadMode();
       toast('任务已更新');
       await loadTasks();
     } catch (e) { toast(e.message); }
@@ -800,14 +831,17 @@ export async function loadTasks() {
 function _renderTaskList() {
   const list = $('#task-list');
   if (!list) return;
+  _updateSortButtons('#task-sort-group', store.taskSort);
   const sorted = [...store.tasks].sort((a, b) => {
-    if (store.taskSort === 'name') {
-      return (a.name || a.id).localeCompare(b.name || b.id, 'zh-Hans-CN');
+    const keyA = a.name || a.id;
+    const keyB = b.name || b.id;
+    switch (store.taskSort) {
+      case 'name-asc': return keyA.localeCompare(keyB, 'zh-Hans-CN');
+      case 'name-desc': return keyB.localeCompare(keyA, 'zh-Hans-CN');
+      // 时间排序：time-desc 最新在前，time-asc 最早在前（mtime 缺省按 0 兜底）
+      case 'time-asc': return (a.mtime || 0) - (b.mtime || 0);
+      default: return (b.mtime || 0) - (a.mtime || 0);
     }
-    // 时间排序：time-desc 最新在前，time-asc 最早在前（mtime 缺省按 0 兜底）
-    return store.taskSort === 'time-asc'
-      ? (a.mtime || 0) - (b.mtime || 0)
-      : (b.mtime || 0) - (a.mtime || 0);
   });
   const html = sorted
     .map(
@@ -829,20 +863,17 @@ function _renderTaskList() {
   list.innerHTML = html || renderEmptyState('📋', '还没有保存任务', '填写表单后点击"保存任务"即可添加');
 }
 
-export function toggleTaskSort() {
-  // 三态循环：时间降序 → 时间升序 → 名字
-  const order = ['time-desc', 'time-asc', 'name'];
-  store.taskSort = order[(order.indexOf(store.taskSort) + 1) % order.length];
-  _updateSortButton('#task-sort-toggle', store.taskSort);
-  _renderTaskList();
+export function toggleTaskSort(mode) {
+  store.taskSort = mode;
+  _renderTaskList(); // 内部会同步按钮高亮
 }
 
-function _updateSortButton(selector, mode) {
-  const btn = $(selector);
-  if (!btn) return;
-  const labels = { 'time-desc': '时间 ↓ 最新在前', 'time-asc': '时间 ↑ 最早在前', name: '名字 A-Z' };
-  btn.textContent = labels[mode] || '排序';
-  btn.title = '点击切换排序方式';
+function _updateSortButtons(groupSelector, mode) {
+  const group = $(groupSelector);
+  if (!group) return;
+  group.querySelectorAll('.sort-toggle').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.sort === mode);
+  });
 }
 
 export function editTask(id) {
@@ -880,6 +911,7 @@ export function editTask(id) {
   if (passVideoEl) passVideoEl.checked = passVideo !== false;
   const padMode = t.references[0]?.pad_mode || 'none';
   switchPadMode(padMode);
+  store.originalPadMode = padMode;  // 记录原始对齐方式，供保存时检测用户改动
   $('#lyrics').value = t.lyrics || '';
   if (!store.currentTask.lyrics_timestamps) store.currentTask.lyrics_timestamps = [];
   $('#constraints').value = t.constraints || '';
@@ -895,6 +927,13 @@ export function editTask(id) {
   if (wmEl) wmEl.checked = t.watermark === true;
   const fmtEl = $('#video-output-format');
   if (fmtEl) fmtEl.value = t.output_format || 'mp4';
+
+  // 回填自定义 prompt：有则显示为自定义（用户可继续编辑），无则保持自动生成
+  const promptTA = $('#prompt-preview');
+  const savedCustom = (t.custom_prompt || '').trim();
+  if (promptTA) promptTA.value = savedCustom;
+  store.customPromptDirty = !!savedCustom;
+  _updatePromptModeBadge();
 
   const radio = $(`[name=mode][value="${t.mode}"]`);
   if (radio) radio.checked = true;
@@ -957,6 +996,12 @@ export function resetForm() {
   $('#audio-refs').value = '';
   store.currentTask = null;
   store.pendingLyricsTimestamps = null;
+  store.originalPadMode = null;
+  // 清空自定义 prompt 状态（预览框在 form 外，form.reset 不会清它）
+  const promptTA = $('#prompt-preview');
+  if (promptTA) promptTA.value = '';
+  store.customPromptDirty = false;
+  _updatePromptModeBadge();
   $$('.mode').forEach((m, i) => m.classList.toggle('active', i === 0));
   updateMode();
   renderVideoAssetPreviews();
@@ -969,6 +1014,56 @@ export function resetForm() {
 export function setTaskResetBtnLabel() {
   const btn = $('#task-reset-btn');
   if (btn) btn.textContent = store.currentTask ? '取消' : '新任务';
+}
+
+// 把 mtime 纳秒时间戳格式化为「MM-DD HH:mm」可读时间；无效时返回空串
+function _fmtMtime(mtimeNs) {
+  if (!mtimeNs) return '';
+  try {
+    const d = new Date(Math.floor(mtimeNs / 1e6));
+    if (Number.isNaN(d.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return ''; }
+}
+
+// 根据 AssetPlanner Decision（action/reason）映射面板状态徽标
+function _assetStatus(item) {
+  const action = item.action;
+  // 阻断类
+  if (!item.can_submit) {
+    return {
+      cls: ' asset-row-changed',
+      badge: `<span class="asset-changed-badge">🔴 无法使用 · 需处理</span>`,
+      hint: escapeHtml(item.block_reason || '此素材无法继续提交，请处理'),
+    };
+  }
+  switch (action) {
+    case 'REUSE_REMOTE':
+      return {
+        cls: '',
+        badge: `<span class="asset-fresh-badge">✓ 复用已上传资源</span>`,
+        hint: item.reason === 'SOURCE_MISSING_REMOTE_REUSE'
+          ? '☁ 仅云端版本 · 本地源已删除，仍可复用；修改对齐/裁剪/分段需重新提供源文件'
+          : '',
+      };
+    case 'UPLOAD_EXISTING_ARTIFACT':
+      return { cls: '', badge: `<span class="asset-fresh-badge">✓ 复用本地产物 · 将上传</span>`, hint: '' };
+    case 'BUILD_AND_UPLOAD':
+      return {
+        cls: ' asset-row-changed',
+        badge: `<span class="asset-changed-badge">🔄 将重新生成并上传</span>`,
+        hint: item.reason === 'SOURCE_CHANGED' ? '源文件已修改'
+          : item.reason === 'TRANSFORM_CHANGED' ? '源文件或处理参数（对齐/裁剪/分段）已变化'
+          : '',
+      };
+    case 'NEED_SOURCE_FOR_REBUILD':
+      return { cls: ' asset-row-changed', badge: `<span class="asset-changed-badge">⚠️ 需重新提供源文件</span>`, hint: '处理参数已变但本地源已删除' };
+    case 'NEED_MATERIAL_REBIND':
+      return { cls: ' asset-row-changed', badge: `<span class="asset-changed-badge">⚠️ 需重新选择素材</span>`, hint: '素材缺失或不可识别' };
+    default:
+      return { cls: '', badge: `<span class="asset-fresh-badge">${escapeHtml(action || '未知')}</span>`, hint: '' };
+  }
 }
 
 export async function showAssets(id) {
@@ -988,15 +1083,18 @@ export async function showAssets(id) {
     panel.className = 'panel asset-panel-inline';
     panel.innerHTML = `
       <div class="section-head"><h3>Asset 清单</h3></div>
-      <div class="asset-hint">素材通过<b>文件指纹</b>自动复用：源文件内容未变时<b>跳过上传</b>、直接复用已上传的 Seedance 资源，无需手动清理。仅在需要<b>强制重新上传</b>某个素材时才点 🗑 删除对应缓存。</div>
+      <div class="asset-hint">素材复用/重传由<b>统一决策引擎</b>判定：源文件与处理参数未变则复用已上传资源，<b>源文件或被处理参数（对齐/裁剪/分段）改变时自动重新上传</b>；源文件已删除时需按状态处理。已上传的云端资源通常<b>不会失效</b>，无需担心；仅当你确实需要<b>强制重新上传</b>某个素材时才点 🗑 清缓存。</div>
       <div class="asset-list">${data.items.length
         ? data.items
             .map((item) => {
-              const srcName = item.source && item.source.path ? item.source.path.split('/').pop() : '';
               const type = item.key.startsWith('anchor_') ? 'Anchor 图片' : item.key.endsWith(':audio') ? '参考音频' : '参考视频';
-              return `<div class="asset-row">
-                <div><strong>${escapeHtml(item.key)}</strong><div class="meta">${escapeHtml(item.asset_id)}</div></div>
-                <div class="meta">${escapeHtml(type)} · ${item.source ? `${escapeHtml(srcName || item.source.path)} · ${formatBytes(item.source.size)}` : '无源文件指纹'}</div>
+              // 依据 Planner Decision（action/reason）渲染状态徽标
+              const st = _assetStatus(item);
+              return `<div class="asset-row${st.cls}">
+                <div><strong>${escapeHtml(item.key)}</strong><div class="meta">${escapeHtml(item.asset_id || '未上传')}</div></div>
+                <div class="meta">${escapeHtml(type)}</div>
+                ${st.badge}
+                ${st.hint ? `<div class="meta asset-status-hint">${st.hint}</div>` : ''}
                 <button class="text-button danger-text" onclick="clearTaskAssets('${escapeAttr(id)}','${escapeAttr(item.key)}')" title="清除此素材缓存，下次运行会重新上传">🗑</button>
               </div>`;
             })
@@ -1016,8 +1114,32 @@ export function closeAssets() {
   if (panel) panel.remove();
 }
 
+// 记录用户是否手动编辑过预览 Prompt（true=自定义，false=自动生成）
+function _promptEdited() {
+  return store.customPromptDirty === true;
+}
+
+function _updatePromptModeBadge() {
+  const modeEl = $('#prompt-preview-mode');
+  const tipEl = $('#prompt-preview-tip');
+  const custom = _promptEdited();
+  if (modeEl) {
+    modeEl.textContent = custom ? '自定义' : '自动生成';
+    modeEl.classList.toggle('is-custom', custom);
+    modeEl.title = custom
+      ? '当前内容为手动编辑，将整段用于生成'
+      : '系统按歌词、参考素材与「任务附加约束」自动生成';
+  }
+  if (tipEl) {
+    // 两种模式给用户不同的引导，讲清「附加约束（追加小补）」与「编辑框（整段重写）」的区别
+    tipEl.innerHTML = custom
+      ? '<strong>自定义 Prompt</strong>：保存 / 生成将<strong>整段</strong>使用下框文本，不再叠加歌词、时间戳与「任务附加约束」。点上方「恢复自动生成」可回到系统版本。'
+      : '<strong>自动生成</strong>：系统按歌词、参考素材与「任务附加约束」自动拼装。<strong>想小幅补充</strong> → 在素材区「任务附加约束」加几句即可（追加在末尾，不影响其他部分）；<strong>想整段重写</strong> → 直接在下框修改，将切换为「自定义 Prompt」（不再叠加歌词 / 时间戳 / 约束）。两者二选一。';
+  }
+}
+
 export async function previewPrompt() {
-  const pre = $('#prompt-preview');
+  const ta = $('#prompt-preview');
   const wrap = $('#prompt-preview-wrap');
   // 已展开 → 收起
   if (wrap && !wrap.hidden) {
@@ -1026,13 +1148,38 @@ export async function previewPrompt() {
   }
   try {
     const t = formTask();
-    const result = await post('/api/prompt-preview', t);
-    if (pre) pre.textContent = result.prompt;
+    // 已有自定义内容时，重新打开仍保留用户文本，不再覆盖
+    if (!_promptEdited()) {
+      const result = await post('/api/prompt-preview', t);
+      if (ta) ta.value = result.prompt;
+    }
+    _updatePromptModeBadge();
     if (wrap) wrap.hidden = false;
-    else if (pre) pre.hidden = false;
+    else if (ta) ta.hidden = false;
   } catch (e) {
     toast(e.message);
   }
+}
+
+// 用户手动编辑 textarea → 标记为自定义 prompt
+export function markPromptEdited() {
+  store.customPromptDirty = true;
+  _updatePromptModeBadge();
+}
+
+// 恢复自动生成：清空自定义标记，重新请求自动 prompt
+export async function resetPromptToAuto() {
+  const ta = $('#prompt-preview');
+  if (ta) ta.value = '';
+  store.customPromptDirty = false;
+  try {
+    const t = formTask();
+    const result = await post('/api/prompt-preview', t);
+    if (ta) ta.value = result.prompt;
+  } catch (e) {
+    toast(e.message);
+  }
+  _updatePromptModeBadge();
 }
 
 export function closePromptPreview() {

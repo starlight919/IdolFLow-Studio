@@ -19,7 +19,8 @@ docs/
 │   ├── Singing_Video_Guide.md       # 演唱视频制作指南
 │   ├── Prompt_Design.md             # Seedance Prompt 设计文档
 │   ├── VIDEO_LOCATIONS.md           # 视频输出位置与管理
-│   └── ANCHOR_REFERENCE_MAPPING.md  # Anchor 参考图映射设计
+│   ├── ANCHOR_REFERENCE_MAPPING.md  # Anchor 参考图映射设计
+│   └── Asset_Design.md              # Seedance 素材 Asset 缓存/复用设计
 ```
 
 ## 🚀 快速入门
@@ -46,6 +47,7 @@ docs/
 - **[Prompt_Design.md](guides/Prompt_Design.md)** — Seedance Prompt 七层语义架构设计文档
 - **[VIDEO_LOCATIONS.md](guides/VIDEO_LOCATIONS.md)** — 视频输出位置、目录结构、磁盘管理
 - **[ANCHOR_REFERENCE_MAPPING.md](guides/ANCHOR_REFERENCE_MAPPING.md)** — Anchor 参考图映射机制
+- **[Asset_Design.md](guides/Asset_Design.md)** — Seedance 素材 Asset 缓存/复用设计
 
 ### 运维 (`docs/`)
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** — 部署、配置、公网访问
@@ -76,4 +78,4 @@ docs/
 
 ---
 
-最后更新：2026-08-14
+最后更新：2026-08-15

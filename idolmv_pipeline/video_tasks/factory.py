@@ -20,9 +20,10 @@ from idolmv_pipeline.video_tasks.store import TaskStore
 logger = logging.getLogger(__name__)
 
 
-def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore | None = None, require_anchors: bool = True) -> VideoTaskAdapter:
+def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore | None = None, require_anchors: bool = True, skip_material_check: bool = False) -> VideoTaskAdapter:
     store = store or TaskStore(config)
-    task = store.validate(task, require_anchors=require_anchors)
+    # skip_material_check：Status API 只展示素材状态，不校验素材文件存在，也跳过生成期（prompt）校验
+    task = store.validate(task, require_anchors=require_anchors, check_materials=not skip_material_check, strict=not skip_material_check)
     task_dir = store.task_dir(task["id"], task.get("task_dir"))
     lyrics = str(task.get("lyrics", "")).strip()
     if task.get("lyrics_file"):
@@ -32,16 +33,26 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
     has_audio = any(ref.get("pass_reference_audio", True) for ref in refs)
     has_video = any(ref.get("pass_reference_video", True) for ref in refs) if refs else True
     camera_policy = task.get("camera_policy")
-    prompt = build_prompt(
-        mode,
-        lyrics,
-        str(task.get("constraints", "")),
-        has_audio_ref=has_audio,
-        has_video_ref=has_video,
-        camera_policy=camera_policy,
-        lyrics_timestamps=task.get("lyrics_timestamps"),
-        timestamp_offset=_timestamp_offset(task, task_dir),
-    )
+    # 自定义 prompt：用户手动编辑过预览即为自定义，整段覆盖自动生成的 prompt
+    #（含歌词/时间戳/附加约束），直接按用户文本发送。
+    custom_prompt = str(task.get("custom_prompt", "")).strip()
+    if skip_material_check:
+        # Status API：只展示素材状态，不构造 prompt（lip_sync 无歌词等任务也能查看）
+        prompt = custom_prompt or ""
+    elif custom_prompt:
+        prompt = custom_prompt
+        logger.info("task=%s 使用自定义 prompt（长度 %d 字符）", task.get("name"), len(custom_prompt))
+    else:
+        prompt = build_prompt(
+            mode,
+            lyrics,
+            str(task.get("constraints", "")),
+            has_audio_ref=has_audio,
+            has_video_ref=has_video,
+            camera_policy=camera_policy,
+            lyrics_timestamps=task.get("lyrics_timestamps"),
+            timestamp_offset=_timestamp_offset(task, task_dir),
+        )
     # Use data_dir (not task name) for output/work dirs so multiple tasks
     # sharing the same data dir co-locate their outputs.
     dir_key = task.get("data_dir") or task["id"]
@@ -80,6 +91,7 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
         generate_audio=task.get("generate_audio", False),
         watermark=task.get("watermark", False),
         output_format=task.get("output_format", "mp4"),
+        custom_prompt=task.get("custom_prompt") or None,
         metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {})},
     )
 

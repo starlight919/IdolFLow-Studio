@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -17,6 +18,18 @@ from idolmv_pipeline.seedance.media import extract_audio, extract_check_frame, m
 from idolmv_pipeline.seedance.state import RunState
 from idolmv_pipeline.video_tasks.manifest import write_manifest
 from idolmv_pipeline.video_tasks.models import AnchorSpec, PromptVariant, ReferenceSpec, VideoTaskAdapter
+from idolmv_pipeline.video_tasks.planner import (
+    BUILD_AND_UPLOAD,
+    NEED_MATERIAL_REBIND,
+    NEED_SOURCE_FOR_REBUILD,
+    REUSE_REMOTE,
+    UPLOAD_EXISTING_ARTIFACT,
+    VISIBILITY_IDENTIFIABLE,
+    VISIBILITY_OPAQUE,
+    InspectedMaterial,
+    AssetDecision,
+    plan_material,
+)
 
 
 def _safe(value: str) -> str:
@@ -26,6 +39,56 @@ def _safe(value: str) -> str:
 def _fingerprint(path: Path) -> dict:
     stat = path.stat()
     return {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+# 处理器版本：处理产物的生成逻辑一旦变化（影响产物内容），递增此值以强制重建缓存。
+# Phase 1 引入 Artifact Signature，把「源文件指纹 + 处理参数 + 处理器版本」一起纳入产物缓存判断。
+_PROCESSOR_VERSION = 2
+
+
+def _read_signature(marker_path: Path) -> str | None:
+    """读取 marker 中记录的 Artifact Signature；旧格式（仅源指纹）或无文件返回 None。"""
+    if marker_path and marker_path.exists():
+        try:
+            data = json.loads(marker_path.read_text())
+            sig = data.get("signature")
+            return sig if isinstance(sig, str) and sig else None
+        except Exception:
+            return None
+    return None
+
+
+def _artifact_signature(source_fp: dict | None, transform: dict) -> str:
+    """计算产物缓存签名 = hash(源文件指纹 + 处理参数 transform + 处理器版本)。
+    任一变化 → 签名变化 → 产物重建 → asset 自动重传。"""
+    payload = {
+        "source": source_fp,
+        "transform": transform,
+        "processor": _PROCESSOR_VERSION,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _fingerprint_content_same(a: dict | None, b: dict | None) -> bool:
+    """比较两个指纹的「内容」是否一致（忽略 path，只看 size + mtime_ns）。
+    用于判断源文件是否真的被编辑：同一文件移动到不同路径（如 anchors/ 与 anchors/selected/）
+    不应被视为"已修改"。"""
+    if not a or not b:
+        return False
+    return a.get("size") == b.get("size") and a.get("mtime_ns") == b.get("mtime_ns")
+
+
+def _write_marker(marker_path: Path, signature: str, source_fp: dict | None, transform: dict) -> None:
+    """写入 Artifact Signature marker（含源指纹与 transform，便于排查）。"""
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps({
+        "signature": signature,
+        "source": source_fp,
+        "transform": transform,
+        "processor": _PROCESSOR_VERSION,
+    }, ensure_ascii=False))
 
 
 class VideoTaskRunner:
@@ -135,8 +198,14 @@ class VideoTaskRunner:
                 actual = probe_duration(audio)
                 if actual < seedance_duration and reference.pass_reference_audio:
                     padded = self._reference_audio_padded(reference)
-                    if not padded.exists() or audio_refreshed:
+                    # 补齐音频的内容依赖 pad_mode + seedance_duration + 源音频，用 Artifact Signature 判断是否重建
+                    padded_transform = {"kind": "audio_padded", "pad_mode": pad_mode, "seedance_duration": seedance_duration}
+                    padded_signature = _artifact_signature(current_fp, padded_transform)
+                    padded_marker = padded.with_name("audio_padded.src.json")
+                    cached_padded_sig = _read_signature(padded_marker)
+                    if not padded.exists() or audio_refreshed or cached_padded_sig != padded_signature:
                         pad_audio_to(audio, padded, seedance_duration, pad_mode=pad_mode)
+                        _write_marker(padded_marker, padded_signature, current_fp, padded_transform)
                     object.__setattr__(reference, 'audio_file_url', str(padded.resolve()))
                 elif reference.pass_reference_audio and not reference.audio_file_url:
                     object.__setattr__(reference, 'audio_file_url', str(audio.resolve()))
@@ -151,16 +220,21 @@ class VideoTaskRunner:
                 seg_source = self.adapter.task_dir / reference.file
                 seg_fp = _fingerprint(seg_source) if seg_source.exists() else None
                 seg_marker = segment.with_name(f"segment_{index:02d}.src.json")
-                seg_cached = None
-                if seg_marker.exists():
-                    try:
-                        seg_cached = json.loads(seg_marker.read_text())
-                    except Exception:
-                        seg_cached = None
-                if not segment.exists() or seg_cached != seg_fp:
+                # 切片内容依赖源视频 + 截取参数（start/duration/crop/pad_mode/original_duration），
+                # 用 Artifact Signature 判断是否重建（更换 pad_mode/split/crop 会触发）
+                seg_transform = {
+                    "kind": "segment",
+                    "start": start,
+                    "duration": duration,
+                    "crop_filter": reference.crop_filter,
+                    "pad_mode": seg_pad_mode,
+                    "original_duration": original_total,
+                }
+                seg_signature = _artifact_signature(seg_fp, seg_transform)
+                cached_seg_sig = _read_signature(seg_marker)
+                if not segment.exists() or cached_seg_sig != seg_signature:
                     trim_reference(seg_source, segment, start, duration, reference.crop_filter, pad_mode=seg_pad_mode, original_duration=original_total)
-                    if seg_fp is not None:
-                        seg_marker.write_text(json.dumps(seg_fp))
+                    _write_marker(seg_marker, seg_signature, seg_fp, seg_transform)
                 check_frame = segment.with_name(f"segment_{index:02d}_check.jpg")
                 if not check_frame.exists():
                     extract_check_frame(segment, check_frame)
@@ -180,54 +254,227 @@ class VideoTaskRunner:
     def _reference_asset_key(self, reference: ReferenceSpec, index: int) -> str:
         return self.adapter.metadata.get("reference_asset_keys", {}).get(f"{reference.name}:{index}", f"reference_{reference.name}_{index:02d}")
 
-    def upload(self, provider: str = "auto") -> dict:
-        self.prepare()
-        assets = self._load_assets()
-        missing = []
+    # ─────────────────────────────────────────────────────────────
+    # Phase 2：Planner 决策（plan → prepare required → upload required）
+    # ─────────────────────────────────────────────────────────────
+    def _resolve_transform(self, kind: str, reference: ReferenceSpec | None = None, index: int | None = None) -> dict | None:
+        """计算某素材的期望 transform（与 Phase 1 产物签名一致）。"""
+        if kind == "anchor":
+            return {"kind": "anchor"}
+        if reference is None:
+            return None
+        if kind == "segment":
+            segments = self._segments(reference)
+            seg = segments[index] if segments and index is not None else None
+            if seg is None:
+                return None
+            start, duration, _, original_total, pad_mode = seg
+            return {
+                "kind": "segment", "start": start, "duration": duration,
+                "crop_filter": reference.crop_filter, "pad_mode": pad_mode,
+                "original_duration": original_total,
+            }
+        if kind == "audio":
+            segments = self._segments(reference)
+            pad_mode = segments[0][4] if segments else "back"
+            seedance_duration = segments[0][2] if segments else None
+            # 音频上传用的是 audio_file_url（可能为 padded）；transform 按实际产物
+            return {"kind": "audio_padded" if reference.audio_file_url and "padded" in reference.audio_file_url else "audio",
+                    "pad_mode": pad_mode, "seedance_duration": seedance_duration}
+        return None
+
+    def _inspect_anchor(self, anchor: AnchorSpec, assets: dict) -> InspectedMaterial:
+        key = self._anchor_asset_key(anchor)
+        path = self.adapter.task_dir / anchor.file
+        source_exists = path.exists()
+        desired = self._resolve_transform("anchor")
+        asset_exists = bool(assets.get(key))
+        # anchor 无独立产物；用「上传时源指纹 vs 当前源指纹」判断源图是否变化（忽略 path，仅看内容）
+        cached_src = assets.get(f"{key}__source")
+        current_src = _fingerprint(path) if source_exists else None
+        artifact_valid = source_exists and _fingerprint_content_same(cached_src, current_src)
+        artifact_transform = desired if source_exists else None
+        asset_transform = assets.get(f"{key}__transform")
+        # 兼容旧资产：asset 有 __source 但无 __transform 时，若源指纹一致则视为匹配（不误判重传）
+        if asset_exists and asset_transform is None and _fingerprint_content_same(cached_src, current_src):
+            asset_transform = desired
+        return InspectedMaterial(
+            material_id=key, asset_key=key,
+            source_exists=source_exists,
+            artifact_valid=artifact_valid, artifact_transform=artifact_transform,
+            asset_exists=asset_exists, asset_transform=asset_transform,
+            visibility=VISIBILITY_IDENTIFIABLE if source_exists else VISIBILITY_OPAQUE,
+            desired_transform=desired,
+        )
+
+    def _inspect_reference(self, reference: ReferenceSpec, assets: dict, index: int) -> InspectedMaterial:
+        key = self._reference_asset_key(reference, index)
+        seg_source = self.adapter.task_dir / reference.file
+        source_exists = seg_source.exists()
+        segment = self._reference_segment(reference, index)
+        seg_marker = segment.with_name(f"segment_{index:02d}.src.json")
+        desired = self._resolve_transform("segment", reference, index)
+        desired_sig = _artifact_signature(_fingerprint(seg_source) if source_exists else None, desired) if desired else None
+        cached_sig = _read_signature(seg_marker)
+        artifact_valid = source_exists and segment.exists() and cached_sig is not None and cached_sig == desired_sig
+        artifact_transform = None
+        if seg_marker.exists():
+            try:
+                artifact_transform = json.loads(seg_marker.read_text()).get("transform")
+            except Exception:
+                artifact_transform = None
+        asset_exists = bool(assets.get(key))
+        asset_transform = assets.get(f"{key}__transform")
+        # 兼容旧资产：asset 有 __source（切片指纹）但无 __transform 时，若切片文件未变（指纹一致），视为 asset 匹配
+        cached_src = assets.get(f"{key}__source")
+        if asset_exists and asset_transform is None:
+            if _fingerprint_content_same(cached_src, _fingerprint(segment) if segment.exists() else None):
+                asset_transform = desired
+        return InspectedMaterial(
+            material_id=key, asset_key=key,
+            source_exists=source_exists,
+            artifact_valid=artifact_valid, artifact_transform=artifact_transform,
+            asset_exists=asset_exists, asset_transform=asset_transform,
+            visibility=VISIBILITY_IDENTIFIABLE if source_exists else VISIBILITY_OPAQUE,
+            desired_transform=desired,
+        )
+
+    def _inspect_audio(self, reference: ReferenceSpec, assets: dict) -> InspectedMaterial:
+        key = f"{reference.name}:audio"
+        source = self.adapter.task_dir / (reference.audio_file or reference.file)
+        source_exists = source.exists()
+        desired = self._resolve_transform("audio", reference)
+        # 音频产物是 audio_file_url（prepare 后确定）；若未 prepare，按 audio.mp3 判断
+        audio_path = None
+        if reference.audio_file_url:
+            audio_path = Path(reference.audio_file_url)
+        else:
+            audio_path = self._reference_audio(reference)
+        cached_sig = _read_signature(audio_path.with_name("audio_padded.src.json")) if audio_path else None
+        # 音频产物是否有效：源音频未变 + 产物存在（或用 padded marker 签名匹配）
+        current_src = _fingerprint(source) if source_exists else None
+        audio_src_marker = (audio_path.with_name("audio.src.json") if audio_path else None)
+        cached_audio_src = None
+        if audio_src_marker and audio_src_marker.exists():
+            try:
+                data = json.loads(audio_src_marker.read_text())
+                cached_audio_src = data.get("source") if "source" in data else data
+            except Exception:
+                cached_audio_src = None
+        artifact_valid = (source_exists and audio_path is not None and audio_path.exists()
+                          and cached_audio_src is not None and cached_audio_src == current_src)
+        artifact_transform = None
+        marker_path = audio_path.with_name("audio_padded.src.json") if audio_path else None
+        if marker_path and marker_path.exists():
+            try:
+                artifact_transform = json.loads(marker_path.read_text()).get("transform")
+            except Exception:
+                artifact_transform = None
+        if artifact_transform is None and audio_path is not None:
+            marker_path2 = audio_path.with_name("audio.src.json")
+            if marker_path2.exists():
+                try:
+                    artifact_transform = json.loads(marker_path2.read_text()).get("transform") or {"kind": "audio"}
+                except Exception:
+                    artifact_transform = None
+        asset_exists = bool(assets.get(key))
+        asset_transform = assets.get(f"{key}__transform")
+        # 兼容旧资产：asset 有值但无 __transform 时，若音频产物仍有效（源未变），视为 asset 匹配
+        if asset_exists and asset_transform is None and artifact_valid:
+            asset_transform = desired
+        return InspectedMaterial(
+            material_id=key, asset_key=key,
+            source_exists=source_exists,
+            artifact_valid=artifact_valid, artifact_transform=artifact_transform,
+            asset_exists=asset_exists, asset_transform=asset_transform,
+            visibility=VISIBILITY_IDENTIFIABLE if source_exists else VISIBILITY_OPAQUE,
+            desired_transform=desired,
+        )
+
+    def _plan_all(self, assets: dict) -> list[AssetDecision]:
+        decisions = []
         for anchor in self.adapter.anchors:
-            key = self._anchor_asset_key(anchor)
-            path = self.adapter.task_dir / anchor.file
-            reused = key in self.adapter.metadata.get("anchor_asset_keys", {}).values()
-            if not assets.get(key) or (not reused and assets.get(f"{key}__source") != _fingerprint(path)):
-                missing.append(("anchor", anchor))
+            decisions.append(plan_material(self._inspect_anchor(anchor, assets)))
         for reference in self.adapter.references:
-            # 纯口型模式不传视频，跳过 segment 视频上传
-            if not reference.pass_reference_video:
-                continue
-            for index, _ in enumerate(self._segments(reference)):
-                key = self._reference_asset_key(reference, index)
-                path = self._reference_segment(reference, index)
-                if not assets.get(key) or assets.get(f"{key}__source") != _fingerprint(path):
-                    missing.append(("reference", (reference, index)))
+            if reference.pass_reference_video:
+                for index, _ in enumerate(self._segments(reference)):
+                    decisions.append(plan_material(self._inspect_reference(reference, assets, index)))
         for reference in self.adapter.references:
-            if reference.audio_file_url:
-                path = Path(reference.audio_file_url)
-                key = f"{reference.name}:audio"
-                if not assets.get(key) or assets.get(f"{key}__source") != _fingerprint(path):
-                    missing.append(("audio", (reference, path)))
+            decisions.append(plan_material(self._inspect_audio(reference, assets)))
+        return decisions
+
+    def upload(self, provider: str = "auto") -> dict:
+        assets = self._load_assets()
+        decisions = self._plan_all(assets)
+        # 阻断：任何素材不可提交则整体失败
+        blocked = [d for d in decisions if not d.can_submit]
+        if blocked:
+            reasons = "; ".join(f"{d.asset_key}: {d.block_reason}" for d in blocked)
+            raise RuntimeError(f"素材无法提交：{reasons}")
+        # 需要重建产物的素材存在 → 执行 prepare（Phase 2 暂保持全局 prepare）
+        if any(d.action == BUILD_AND_UPLOAD for d in decisions):
+            self.prepare()
+            assets = self._load_assets()
+            decisions = self._plan_all(assets)
+            blocked = [d for d in decisions if not d.can_submit]
+            if blocked:
+                reasons = "; ".join(f"{d.asset_key}: {d.block_reason}" for d in blocked)
+                raise RuntimeError(f"素材无法提交：{reasons}")
+        # 需要上传的素材（UPLOAD_EXISTING_ARTIFACT / BUILD_AND_UPLOAD）
+        missing = []
+        for d in decisions:
+            if d.action in (UPLOAD_EXISTING_ARTIFACT, BUILD_AND_UPLOAD):
+                if d.asset_key.startswith("anchor_"):
+                    missing.append(("anchor", d.asset_key))
+                elif d.asset_key.endswith(":audio"):
+                    missing.append(("audio", d.asset_key))
+                else:
+                    # reference_<name>_<idx>
+                    missing.append(("reference", d.asset_key))
         if not missing:
             return assets
         self._progress("tunnel", "正在启动或复用素材隧道")
         state = tunnel.start(provider)
         total = len(missing)
-        for position, (kind, value) in enumerate(missing, 1):
+        for position, (kind, key) in enumerate(missing, 1):
             if kind == "anchor":
-                anchor = value
+                anchor = next((a for a in self.adapter.anchors if self._anchor_asset_key(a) == key), None)
+                if anchor is None:
+                    continue
                 path = self.adapter.task_dir / anchor.file
-                key = self._anchor_asset_key(anchor)
                 name = f"video_{_safe(self.adapter.name)}_{_safe(anchor.key)}"
                 asset_type = "Image"
             elif kind == "audio":
-                reference, path = value
-                key = f"{reference.name}:audio"
+                ref_name = key[: -len(":audio")]
+                reference = next((r for r in self.adapter.references if r.name == ref_name), None)
+                if reference is None:
+                    continue
+                path = Path(reference.audio_file_url) if reference.audio_file_url else self._reference_audio(reference)
                 name = f"video_{_safe(self.adapter.name)}_{_safe(reference.name)}_audio"
                 asset_type = "Audio"
             else:
-                reference, index = value
+                # reference_<name>_<idx>：用 _reference_asset_key 精确匹配（name 本身可含下划线）
+                reference = None
+                index = None
+                for r in self.adapter.references:
+                    for i, _ in enumerate(self._segments(r)):
+                        if self._reference_asset_key(r, i) == key:
+                            reference, index = r, i
+                            break
+                    if reference is not None:
+                        break
+                if reference is None:
+                    continue
                 path = self._reference_segment(reference, index)
-                key = self._reference_asset_key(reference, index)
                 name = f"video_{_safe(self.adapter.name)}_{_safe(reference.name)}_{index:02d}"
                 asset_type = "Video"
+            # 记录该素材的期望 transform，供后续 plan 判断 asset 是否仍匹配
+            if kind == "anchor":
+                transform = {"kind": "anchor"}
+            elif kind == "audio":
+                transform = self._resolve_transform("audio", reference)
+            else:
+                transform = self._resolve_transform("segment", reference, index)
             self._progress("uploading", f"正在上传素材 {position}/{total}", completed=position - 1, total=total)
             last_error = None
             for attempt in range(3):
@@ -245,6 +492,7 @@ class VideoTaskRunner:
             else:
                 raise last_error
             assets[f"{key}__source"] = _fingerprint(path)
+            assets[f"{key}__transform"] = transform
             self._save_assets(assets)
         self._progress("uploading", "素材上传完成", completed=total, total=total)
         return assets

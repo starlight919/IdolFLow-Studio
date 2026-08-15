@@ -697,6 +697,12 @@ export async function loadAnchorTasks() {
 function _renderAnchorTaskList() {
   const list = $('#anchor-task-list');
   if (!list) return;
+  const sortGroup = $('#anchor-task-sort-group');
+  if (sortGroup) {
+    sortGroup.querySelectorAll('.sort-toggle').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.sort === store.anchorTaskSort);
+    });
+  }
 
   // Merge orphaned tasks into the regular list — each orphan is shown as a
   // disabled card with a single "恢复" action, same layout as normal tasks.
@@ -710,14 +716,16 @@ function _renderAnchorTaskList() {
 
   const all = [...store.anchorTasks.map((t) => ({ ...t, _orphan: false })), ...orphanCards];
 
-  // 排序：默认按最后编辑时间倒序，可切换为时间升序或名字
+  // 排序：默认按最后编辑时间倒序，可切换为时间升序或名字（A-Z / Z-A）
   all.sort((a, b) => {
-    if (store.anchorTaskSort === 'name') {
-      return (a.name || a.id).localeCompare(b.name || b.id, 'zh-Hans-CN');
+    const keyA = a.name || a.id;
+    const keyB = b.name || b.id;
+    switch (store.anchorTaskSort) {
+      case 'name-asc': return keyA.localeCompare(keyB, 'zh-Hans-CN');
+      case 'name-desc': return keyB.localeCompare(keyA, 'zh-Hans-CN');
+      case 'time-asc': return (a.mtime || 0) - (b.mtime || 0);
+      default: return (b.mtime || 0) - (a.mtime || 0);
     }
-    return store.anchorTaskSort === 'time-asc'
-      ? (a.mtime || 0) - (b.mtime || 0)
-      : (b.mtime || 0) - (a.mtime || 0);
   });
 
   const html = all
@@ -748,16 +756,9 @@ function _renderAnchorTaskList() {
   list.innerHTML = html || renderEmptyState('🧩', '还没有 Anchor 任务', '使用表单生成候选图片后可设为 Anchor');
 }
 
-export function toggleAnchorTaskSort() {
-  const order = ['time-desc', 'time-asc', 'name'];
-  store.anchorTaskSort = order[(order.indexOf(store.anchorTaskSort) + 1) % order.length];
-  const btn = $('#anchor-task-sort-toggle');
-  if (btn) {
-    const labels = { 'time-desc': '时间 ↓ 最新在前', 'time-asc': '时间 ↑ 最早在前', name: '名字 A-Z' };
-    btn.textContent = labels[store.anchorTaskSort] || '排序';
-    btn.title = '点击切换排序方式';
-  }
-  _renderAnchorTaskList();
+export function toggleAnchorTaskSort(mode) {
+  store.anchorTaskSort = mode;
+  _renderAnchorTaskList(); // 内部会同步按钮高亮
 }
 
 export async function recoverAnchorTask(taskId) {

@@ -17,6 +17,7 @@ from idolmv_pipeline.review.publisher import Publisher, safe_name
 from idolmv_pipeline.seedance.media import extract_audio
 from idolmv_pipeline.video_tasks.factory import adapter_from_task
 from idolmv_pipeline.video_tasks.prompts import build_prompt
+from idolmv_pipeline.video_tasks.runner import VideoTaskRunner
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web" / "static"
 
@@ -702,23 +703,60 @@ def handle_tasks_delete(handler, path: str):
 @_register("POST", "/api/prompt-preview")
 def handle_prompt_preview(handler, path: str):
     data = read_json(handler)
+    # 自定义 prompt：用户在预览框手动编辑后，前端会带上 custom_prompt，直接回显
+    custom_prompt = str(data.get("custom_prompt", "")).strip()
+    if custom_prompt:
+        json_response(handler, 200, {"prompt": custom_prompt, "custom": True})
+        return
     references = data.get("references", [])
     has_audio = any(ref.get("pass_reference_audio", True) for ref in references)
     has_video = any(ref.get("pass_reference_video", True) for ref in references)
     camera_policy = data.get("camera_policy")
-    json_response(handler, 200, {"prompt": build_prompt(data["mode"], data.get("lyrics", ""), data.get("constraints", ""), has_audio_ref=has_audio, has_video_ref=has_video, camera_policy=camera_policy, lyrics_timestamps=data.get("lyrics_timestamps"))})
+    json_response(handler, 200, {"prompt": build_prompt(data["mode"], data.get("lyrics", ""), data.get("constraints", ""), has_audio_ref=has_audio, has_video_ref=has_video, camera_policy=camera_policy, lyrics_timestamps=data.get("lyrics_timestamps")), "custom": False})
+
+
+def _file_fingerprint(path: Path) -> dict | None:
+    """与 runner._fingerprint 一致的源文件指纹；文件不存在返回 None。"""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 def _task_assets(handler, task_id: str) -> dict:
+    """返回每个素材的 Planner Decision。
+
+    使用 AssetPlanner 作为唯一决策引擎，与 Runner 判定一致，
+    避免"UI 显示复用、Runner 实际失败"的不一致。设计见 docs/guides/Asset_Design.md。
+    """
     task = handler.app.store.get(task_id)
-    adapter = adapter_from_task(task, handler.app.config, handler.app.store)
+    # skip_material_check=True：面板需展示"素材缺失"状态，不能因缺失而抛错
+    adapter = adapter_from_task(task, handler.app.config, handler.app.store, skip_material_check=True)
     path = adapter.assets_file
     assets = json.loads(path.read_text()) if path.is_file() else {}
+    # plan 不需要 client（仅 upload 需要），传 None 即可
+    runner = VideoTaskRunner(adapter, client=None, progress=lambda **_: None)
+    decisions = runner._plan_all(assets)
     items = []
-    for key, value in assets.items():
-        if key.endswith("__source"):
-            continue
-        items.append({"key": key, "asset_id": value, "source": assets.get(f"{key}__source")})
+    for d in decisions:
+        items.append({
+            "key": d.asset_key,
+            "asset_id": assets.get(d.asset_key),
+            "material_id": d.material_id,
+            "action": d.action,
+            "reason": d.reason,
+            "source_state": d.source_state,
+            "artifact_state": d.artifact_state,
+            "asset_state": d.asset_state,
+            "visibility_state": d.visibility_state,
+            "can_submit": d.can_submit,
+            "requires_source": d.requires_source,
+            "block_reason": d.block_reason,
+            "current_transform": d.current_transform,
+            "cached_transform": d.cached_transform,
+            "preview_url": d.preview_url,
+        })
     return {"task_id": task_id, "path": str(path), "items": items}
 
 
