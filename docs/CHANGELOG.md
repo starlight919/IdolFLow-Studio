@@ -23,7 +23,17 @@
 - **参考音频三种输入场景说明**：`Asset_Design.md` 升至 V1.1，§4.1 新增三种输入场景（① 视频+视频提取音频、② 纯音频、③ 视频+独立音频=不提供）的来源/处理/提交差异表，说明传视频时音频以视频提取为准、音频 tab 独立音频被覆盖的切换边界；`Video_Task_Workflow.md`、`Singing_Video_Guide.md` 同步补充
 - **修复「视频 + 独立音频」被前端误填充**：`formTask` 视频分支去掉 `audio_file` 生成，传视频时音频恒从视频提取；`switchRefTab` 切到视频 tab 时若音频 tab 有残留音频给出 toast 提示「将被视频提取音频覆盖」，避免两类音频来源混淆
 - **修复上传/选择音视频的归位不一致**：此前上传只按「当前 tab」决定写入视频还是音频字段（视频 tab 上传音频会误写进视频字段、音频 tab 上传视频会误写进音频字段），而「选择文件」是按文件类型自动切 tab——现统一为按**文件类型**归位：音频→🎵 音频 tab、视频→📹 视频 tab；选择文件时若混选（视频+音频）则只保留视频进视频 tab 并提示「音频以视频提取为准」，避免音频污染视频字段导致生成时把音频当视频切片
-- **明确「打时间戳」独立于「传参考音频」勾选**：`pass_reference_audio` 只控制是否把提取的音频上传给 Seedance 用于生成；即使不勾选，打时间戳（前端本地流程）仍会从参考视频提取音频用于播放定位、逐句打点。文档（`Video_Task_Workflow.md`、`Singing_Video_Guide.md`）已补充说明
+- **明确「打时间戳」独立于「传参考音频」勾选，且优先用传的音频本身**：`pass_reference_audio` 只控制是否把提取的音频上传给 Seedance 用于生成；打时间戳（前端本地流程）的音频来源优先级为「音频 tab 传的纯音频 → 用音频本身；否则用参考视频 → 从视频提取」，不受勾选影响。代码 `_resolveAudioSource` 调整优先级 + 文档（`Video_Task_Workflow.md`、`Singing_Video_Guide.md`）补充说明
+- **恢复「视频 + 独立音频」对口型**：同时传视频（📹 tab）与独立音频（🎵 tab）时，音频作为**独立对口型源**保存并生效（视频模仿动作、音频对口型），生成时用独立音频而不是从视频提取。`formTask` 恢复 `audio_file` 生成；`editTask` 回填 `audio_file` 到音频字段（编辑可见、可改）；「选择文件 / 上传」改为按**当前 tab** 归位（不丢弃、不自动切 tab），视频与音频可共存；移除此前「传视频时音频以视频提取为准、独立音频被覆盖」的 toast 提示
+- **传独立音频时置灰「传参考音频」**：用户上传了独立音频（对口型源）时，视频 tab 的「传参考音频」（从视频提取）**置灰禁用**并提示「已用独立音频对口型，视频音频不适用」——避免两个音频来源混淆；`formTask` 在有 `audio_file` 时 `pass_reference_audio` 强制为 `true`（上传独立音频对口型）
+- **修复资产面板 `asset_id` 残留误导**：`_task_assets` 的 `asset_id` 仅在「存在有效资产可复用」（`asset_state=AVAILABLE`）时返回，资产缺失/需重传（`MISSING`）时返回空——避免 UI 显示旧 asset id（如「重建并上传」却仍显示 asset-xxx）造成困惑
+- **处理无效 asset id 导致提交失败**：`data/街道风/seedance/assets.json` 中 `anchor_anchor-1` 残留了一个无效的资产 id（`asst_1`，非真实 Seedance 资源），被 planner 误判可复用，提交时 Seedance 报 `asset asst_1 is not found`。已清理该无效资产记录，提交时重新上传真实 asset
+- **上传/选择参考音视频按文件类型自动切 tab**：上传音频文件（或选择文件时选中音频）自动切到「🎵 音频」tab 并写入音频字段，上传/选择视频自动切到「📹 视频」tab 写入视频字段（按文件类型归位），两个 tab 内容可共存（视频 + 独立音频对口型）；上传时**按文件类型自动归类 category**（音视频→参考音视频、图片→Anchor 图片），即使下拉框停在「Anchor 图片」也能正确上传，并同步下拉框选中值；静态前端 JS 改 `Cache-Control: no-store` 强制刷新最新代码，避免浏览器缓存旧 JS 导致交互不生效
+- **修复音频资产 `seedance_duration`/`kind` 误判「未上传」**：`_resolve_transform("audio")` 此前只依赖 `_segments`（视频/首个 media 时长）算 seedance_duration 与 kind，未区分「纯音频任务的独立音频 / 独立上传音频」与「视频提取音频」——当音频源自身时长与视频不同（如 21.1s 音频 vs seedance_duration 22），或音频源短于 seedance_duration 需 pad（audio_padded）时，desired transform 与已上传资产不匹配，导致已上传的音频资产反复显示「未上传」并重传。现改为基于**音频源自身时长**（`audio_file` 或纯音频的 `file`）计算 seedance_duration，并按「音频源时长 < seedance_duration」推断 `kind=audio_padded`，使 status 面板（未 prepare）与 prepare 后产物一致
+- **修复「复用已上传资源」误判：资产必须对应当前产物、且产物必须对应当前源才复用**：`_inspect_reference` / `_inspect_audio` 此前只凭「本地产物有效」或「资产 __source 匹配当前产物」就判定复用云端资产，未校验两件事：
+  1. 资产上传时的产物指纹（`__source`）/ `__transform` 是否与当前产物一致（产物重建后旧资产会残留）；
+  2. **产物本身是否对应当前源视频**（`artifact_valid`，即 marker 签名匹配当前源）——否则即使 work 目录残留旧切片 + 资产 __source 匹配旧切片，也可能被误判复用（如「街道风/冻结」从未真正生成对应当前 frozen.mov 的切片，却显示 ✓ 复用）。
+  现改为「有效资产」= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配）+ `artifact_valid` 三者同时满足才复用；任一不满足则走重建/重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`）
 
 ### 🔊 参考音视频点击预览
 - 「素材 → 参考音视频」缩略图支持点击预览：**音频**（♪ 图标）点击弹出 lightbox 内嵌 `<audio controls autoplay>` 播放器；**视频**缩略图点击弹出 `<video controls>` 播放器（此前视频仅静音缩略图、音频无任何播放能力）

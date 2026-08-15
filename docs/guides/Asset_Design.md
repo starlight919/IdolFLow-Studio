@@ -1,6 +1,6 @@
 # Seedance 素材 Asset 缓存与复用设计
 
-> 版本：V1.1（2026-08-15）
+> 版本：V1.3（2026-08-15）
 > 实现文件：`idolmv_pipeline/video_tasks/planner.py`、`runner.py`、`factory.py`、`web/handlers.py`
 
 ---
@@ -70,24 +70,24 @@ Material（素材）──引用──> Source（源文件）
 |------|---------|-----------------------|--------|---------|---------|---------|---------|
 | **① 视频 + 视频提取音频**（可选用不用） | 📹 视频 tab 选视频，勾选/取消「传参考音频」 | `true` | 视频文件 | **从视频 `extract_audio`** | 提取 | 走 `segment_XX` | `video_url` + `audio_url`（勾选时） |
 | **② 纯音频** | 🎵 音频 tab 选音频 | `false` | 音频文件 | 音频文件本身 | `copyfile` 直接拷贝 | **跳过** | 只 `audio_url` |
-| **③ 视频 + 独立音频** | ❌ **不提供**（两个 tab 模型下由 ① 覆盖） | — | — | — | — | — | — |
+| **③ 视频 + 独立音频**（对口型） | 📹 视频 tab 选视频 + 🎵 音频 tab 选独立音频 | `true` | 视频文件 | **独立音频 `audio_file`**（不从视频提取） | 用独立音频 | 走 `segment_XX` | `video_url` + `audio_url`（独立音频） |
 
-> **关键设计：不做"视频 + 独立音频"的独立入口。**
-> 传参考视频时，音频**一律从视频提取**（场景 ①），音频 tab 里选的独立音频**不生效、被覆盖**。前端在用户从「🎵 音频」切到「📹 视频」tab 时给出 toast 提示：
-> `⚠️ 音频 tab 中已选的 N 个音频将被忽略：传参考视频时音频以视频提取为准`
->
-> 这避免了"视频 + 视频提取音频"与"视频 + 独立音频"两类来源在同一个任务里混淆——传视频即音频以视频为准，简单明确。
+> **关键设计：视频 + 独立音频对口型**（📹 与 🎵 两个 tab 可共存）。
+> 同时传视频与独立音频时，音频作为**独立对口型源**保存并生效（视频模仿动作、音频对口型），生成时用独立音频而非从视频提取。两个 tab 内容互不覆盖：「选择文件 / 上传」按**当前 tab** 归位（视频 tab → 视频字段、音频 tab → 音频字段），编辑回填时 `audio_file` 一并回填到音频字段。未传独立音频时才回退场景 ①（从视频提取）。
 
 **源文件选择逻辑**：`source = task_dir / (reference.audio_file or reference.file)`。
-- 场景 ①：前端**不设置 `audio_file`** → `source = file`（视频）→ 从视频提取音频
-- 场景 ②：前端**不设置 `audio_file`** → `source = file`（音频）→ 直接拷贝
+- 场景 ①：前端不设置 `audio_file` → `source = file`（视频）→ 从视频提取音频
+- 场景 ②：前端不设置 `audio_file` → `source = file`（音频）→ 直接拷贝
+- 场景 ③：前端设置 `audio_file` → `source = audio_file`（独立音频）→ 视频仍走切片，音频用独立音频
 
-> `audio_file` 字段在后端保留（`source` 选择表达式兼容它），但**当前前端不会填充**，仅作向后兼容，实际不参与流程。
-
-> **切换边界（视频 ⇄ 纯音频）**：`switchRefTab` 只切换显示、**不清空**另一字段的数据，保存时 `formTask` 按**当前 tab** 二选一取数据（`isAudioTab ? #audio-refs : #references`）：
+> **切换边界（视频 ⇄ 纯音频）**：`switchRefTab` 只切换显示、**不清空**另一字段的数据，保存时 `formTask` 按**当前 tab** 取数据（`isAudioTab ? #audio-refs : #references`）：
 > - 停在「🎵 音频」tab → 生成纯音频 references（场景 ②），残留的视频 `#references` 不混入 ✅
-> - 停在「📹 视频」tab → 生成视频 references（场景 ①），残留的 `#audio-refs` 音频被忽略并已 toast 提示
-> 编辑任务回填时 `editTask` 保证两类互斥：纯音频任务清空 `#references`、视频任务清空 `#audio-refs`。
+> - 停在「📹 视频」tab → 生成视频 references（场景 ①/③）；若 `#audio-refs` 有独立音频，作为 `audio_file` 一并保存（场景 ③，对口型），不清空 ✅
+> 编辑任务回填时 `editTask`：纯音频任务清空 `#references`；视频任务若带 `audio_file` 则回填到音频字段（编辑可见、可改）。
+
+> **音频 transform 匹配基于「音频源自身时长」**（`_resolve_transform("audio")`）：
+> - `seedance_duration` = `max(4, ceil(音频源时长))`，其中**音频源** = `audio_file`（独立音频）或纯音频任务的 `file`——而非视频的时长。因为独立音频/纯音频与视频时长可能不同（如 21.1s 音频 vs 视频 16.8s），用视频时长会误判不匹配、反复重传。
+> - `kind` = `audio_padded`（音频源时长 < seedance_duration，会被 pad）或 `audio`；status 面板未 prepare（`audio_file_url` 未设）时按「音频源时长 < seedance_duration」推断，与 prepare 后产物一致，避免音频资产误显示「未上传」。
 
 ---
 
@@ -142,9 +142,11 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
 
 ```
 有源：
-  产物签名匹配 → 有 Asset? REUSE_REMOTE : UPLOAD_EXISTING_ARTIFACT
-  否则 asset transform 匹配（含旧资产兜底） → REUSE_REMOTE
-  否则 → BUILD_AND_UPLOAD
+  本地产物有效（签名匹配）？
+    ├─ 有「有效 Asset」（对应当前产物）→ REUSE_REMOTE（复用云端）
+    └─ 无「有效 Asset」→ UPLOAD_EXISTING_ARTIFACT（本地产物有效，重新上传）
+  产物无效但 Asset transform 匹配（含旧资产兜底） → REUSE_REMOTE
+  否则 → BUILD_AND_UPLOAD（重建产物并上传）
 
 无源：
   有 Asset 且可识别：
@@ -153,6 +155,15 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
   有 Asset 但不可识别 → NEED_MATERIAL_REBIND
   无 Asset → NEED_MATERIAL_REBIND
 ```
+
+> **「有效 Asset」= 云端资产对应当前本地产物 + 本地产物对应当前源**，判定规则（`_inspect_reference` / `_inspect_audio`），三者同时满足才复用：
+> 1. **资产存在**（`assets.json` 有该 key 的 asset id）；
+> 2. **资产对应当前产物**：资产有 `__transform` → 其 transform 与当前 desired 一致；旧资产无 `__transform` → 上传时的产物指纹 `__source` 与当前本地产物一致（`size + mtime_ns`，忽略 path）；
+> 3. **产物对应当前源**（`artifact_valid`）：本地产物的 marker 签名匹配当前源视频/源音频（源未变、切片有效）。
+>
+> 任一不满足即视为"无有效 Asset"，走重建/重传——**避免误判复用旧视频/旧音频**。典型误判场景：
+> - 产物已重建（换 `pad_mode` / 重新切片）而云端资产仍是旧产物 → 不满足 ② → 重传产物；
+> - work 目录残留旧切片、资产 `__source` 匹配旧切片，但**该切片无 marker / 不对应当前源**（如换过源视频但没重新切片）→ 不满足 ③ → 重建并上传。
 
 ### 7.3 阻断
 
@@ -210,9 +221,11 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 |---|------|------|
 | 1 | **源文件删除** | 源缺失时若无法识别内容（无 Snapshot），判定 `NEED_MATERIAL_REBIND` 阻断并提示重选；已上传的云端资源仍有效，但需用户重新提供源文件才能继续 |
 | 2 | **Anchor Asset key 基于位置** | key 由 `anchor-N` 位置决定，调整 Anchor 顺序会使同一张图换 key 而重复上传；稳定 Material ID 为后续优化方向 |
-| 3 | **旧资产无 transform** | 兼容：有 `__source` 无 `__transform` 时，若源/产物指纹一致则视为匹配复用，不误判重传 |
-| 4 | **云端资源持久有效** | Seedance Asset 为持久化云端对象，正常情况下不会失效；🗑 清缓存仅用于确实需要强制重新上传的场景 |
-| 5 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
+| 3 | **旧资产无 transform 的兼容** | 有 `__source` 无 `__transform` 时，若产物指纹一致则视为匹配复用；但**产物重建后（`__source` 与当前产物不一致）会视为"无有效资产"走重传**，不复用旧资产 |
+| 4 | **复用三重校验（产物重建/换源防误判）** | **核心防误判**：「有效 Asset」= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配）+ 产物对应当前源（`artifact_valid`，marker 签名匹配）。产物重建或**残留旧切片 + 资产 __source 匹配但产物无 marker/不对应当前源**时，判定 `UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`，而不是误显示「✓ 复用已上传资源」 |
+| 5 | **跨任务文件夹隔离** | 资产缓存 `seedance/assets.json` 按**任务文件夹（data_dir）** 独立存放，**跨文件夹不共享、不互相复用**。即使两个文件夹有相同文件名的素材（如同名视频），资产也不通用——避免跨任务串数据；若需跨文件夹复用需引入全局内容指纹去重（后续方向） |
+| 6 | **云端资源持久有效** | Seedance Asset 为持久化云端对象，正常情况下不会失效；🗑 清缓存仅用于确实需要强制重新上传的场景 |
+| 7 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
 
 ---
 

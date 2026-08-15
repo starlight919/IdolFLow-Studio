@@ -169,6 +169,30 @@ export function renderVideoAssetPreviews() {
         }).join('')
       : '<p class="hint">未选择任何文件</p>';
   }
+  _syncPassAudioDisabled();
+}
+
+// 传了独立音频（对口型源）时，「传参考音频」（从视频提取）用不上，置灰并说明
+function _syncPassAudioDisabled() {
+  const cb = $('#pass-reference-audio');
+  const wrap = $('#pass-audio-wrap');
+  if (!cb) return;
+  const hasOwnAudio = lines('#audio-refs').length > 0;
+  cb.disabled = hasOwnAudio;
+  wrap?.classList.toggle('disabled', hasOwnAudio);
+  if (wrap) {
+    let tip = wrap.querySelector('.pass-audio-note');
+    if (hasOwnAudio) {
+      if (!tip) {
+        tip = document.createElement('span');
+        tip.className = 'pass-audio-note';
+        wrap.appendChild(tip);
+      }
+      tip.textContent = '已用独立音频对口型，视频音频不适用';
+    } else if (tip) {
+      tip.remove();
+    }
+  }
 }
 
 export function removeVideoAsset(type, file) {
@@ -351,26 +375,32 @@ export function confirmAssetSelection() {
   }
 
   let target = store.assetPickerCategory === 'anchors' ? '#anchors' : '#references';
-  // 参考音视频：根据选中文件类型自动判断 tab —— 全音频则切音频 tab，
-  // 含视频则切视频 tab（视频 tab 为主输入）。
+  // 参考音视频：按「文件类型」分别归位到正确 tab/字段，两个 tab 可共存（视频 + 独立音频对口型）——
+  // 音频文件 → 音频 tab / #audio-refs；视频文件 → 视频 tab / #references。避免在视频 tab 选了音频却落到视频字段。
   if (store.assetPickerCategory === 'references') {
     const selected = [...store.assetPickerSelected];
     const isAudioRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
-    const hasVideo = selected.some((f) => !isAudioRe.test(f));
-    if (hasVideo) {
-      // 含视频：切视频 tab，只保留视频文件（视频 tab 不放独立音频），丢弃音频并提示
-      const videos = selected.filter((f) => !isAudioRe.test(f));
-      const dropped = selected.length - videos.length;
-      if (dropped) toast(`已忽略 ${dropped} 个音频：视频 tab 不放独立音频，音频以视频提取为准`);
+    const audioFiles = selected.filter((f) => isAudioRe.test(f));
+    const videoFiles = selected.filter((f) => !isAudioRe.test(f));
+    if (videoFiles.length) {
       switchRefTab('video');
-      target = '#references';
-      $(target).value = videos.join('\n');
-      renderVideoAssetPreviews();
-      closeAssetPicker();
-      return;
+      const vEl = $('#references');
+      if (vEl) {
+        vEl.value = videoFiles.join('\n');
+        // 若同时选了音频，保留进音频字段（共存）
+        if (audioFiles.length) {
+          const aEl = $('#audio-refs');
+          if (aEl) aEl.value = audioFiles.join('\n');
+        }
+      }
+    } else {
+      switchRefTab('audio');
+      const aEl = $('#audio-refs');
+      if (aEl) aEl.value = audioFiles.join('\n');
     }
-    switchRefTab('audio');
-    target = '#audio-refs';
+    renderVideoAssetPreviews();
+    closeAssetPicker();
+    return;
   }
   $(target).value = [...store.assetPickerSelected].join('\n');
   renderVideoAssetPreviews();
@@ -604,17 +634,23 @@ export function formTask() {
           pad_mode: 'none',
         }));
       }
-      // 视频 tab：传视频，音频一律从视频提取（音频 tab 选的独立音频不生效，会在此被覆盖）
+      // 视频 tab：传视频 + 可选「独立音频」（音频 tab 传的，对口型源，优先于从视频提取）
       const padEl = document.getElementById('pad-mode');
       const passAudioEl = document.getElementById('pass-reference-audio');
-      return videoRefs.map((file, i) => ({
-        name: `reference-${i + 1}`,
-        file,
-        duration: 15,
-        pass_reference_audio: passAudioEl?.checked ?? true,
-        pass_reference_video: true,
-        pad_mode: padEl?.value || 'none',
-      }));
+      return videoRefs.map((file, i) => {
+        const ownAudio = audioRefs[i];
+        return {
+          name: `reference-${i + 1}`,
+          file,
+          duration: 15,
+          // 有独立音频 → 用独立音频对口型（pass_reference_audio 强制 true，上传它）；
+          // 无独立音频 → 按「传参考音频」勾选决定是否从视频提取
+          pass_reference_audio: ownAudio ? true : (passAudioEl?.checked ?? true),
+          pass_reference_video: true,
+          pad_mode: padEl?.value || 'none',
+          ...(ownAudio ? { audio_file: ownAudio } : {}),
+        };
+      });
     })(),
     lyrics: $('#lyrics').value.trim(),
     constraints: $('#constraints').value.trim(),
@@ -642,11 +678,6 @@ export function switchRefTab(tab) {
     if (padRow) padRow.style.display = '';
     // motion 模式不显示"传参考音频"
     if (passAudioWrap) passAudioWrap.style.display = mode === 'motion' ? 'none' : '';
-    // 用户在音频 tab 选过独立音频，切到视频 tab 后这些音频会被"从视频提取的音频"覆盖
-    const audioFiles = lines('#audio-refs');
-    if (audioFiles.length) {
-      toast(`⚠️ 音频 tab 中已选的 ${audioFiles.length} 个音频将被忽略：传参考视频时音频以视频提取为准`);
-    }
   } else {
     // 音频 tab：隐藏时长对齐 + "传参考音频"（选音频 tab 就是要传音频）
     if (padRow) padRow.style.display = 'none';
@@ -900,15 +931,17 @@ export function editTask(id) {
   $('#candidates').value = t.candidates;
   $('#anchors').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
   // 参考音视频：纯音频任务（pass_reference_video=false）写入音频字段，否则写入视频字段
+  // 视频任务若有独立音频（audio_file，对口型源），回填到音频字段，编辑时可见、可改
   const isAudioOnly = t.references?.length > 0 && t.references.every(r => r.pass_reference_video === false);
   const refFiles = t.references.map((x) => stripDirPrefix(x.file));
+  const audioFiles = t.references.map((x) => (x.audio_file ? stripDirPrefix(x.audio_file) : '')).filter(Boolean);
   if (isAudioOnly) {
     $('#references').value = '';
     $('#audio-refs').value = refFiles.join('\n');
     switchRefTab('audio');
   } else {
     $('#references').value = refFiles.join('\n');
-    $('#audio-refs').value = '';
+    $('#audio-refs').value = audioFiles.join('\n');
     switchRefTab('video');
   }
   const passAudio = t.references[0]?.pass_reference_audio;
@@ -1271,7 +1304,22 @@ export async function uploadAsset() {
   const id = $('#task-dir').value.trim();
   if (!file || !id) return toast('请先选择任务文件夹并选择文件');
 
-  const category = $('#upload-category').value;
+  let category = $('#upload-category').value;
+  // 按文件类型自动归类：音视频 → 参考音视频（references），图片 → Anchor 图片（anchors）。
+  // 避免下拉框默认停在「Anchor 图片」时，用户选音频/视频被误当 Anchor 上传，导致切不到对应 tab。
+  const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name);
+  const isVideo = /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
+  if (isAudio || isVideo) {
+    if (category !== 'references') {
+      category = 'references';
+      const catEl = $('#upload-category');
+      if (catEl) catEl.value = 'references';
+    }
+  } else if (category !== 'anchors') {
+    category = 'anchors';
+    const catEl = $('#upload-category');
+    if (catEl) catEl.value = 'anchors';
+  }
   const statusEl = $('#upload-status');
   if (statusEl) statusEl.textContent = '上传中…';
   const xhr = new XMLHttpRequest();
@@ -1290,8 +1338,9 @@ export async function uploadAsset() {
       let uploadedFile = null;
       try { uploadedFile = JSON.parse(xhr.responseText).file; } catch { uploadedFile = null; }
       if (!uploadedFile) uploadedFile = `${category}/${file.name}`;
-      // 参考音视频按「文件类型」自动归位到对应 tab/字段（与「选择文件」一致），
-      // 避免在视频 tab 上传音频被误写进视频字段、或在音频 tab 上传视频被误写进音频字段。
+      // 参考音视频按「文件类型」自动切到对应 tab 并写入字段：
+      // 上传音频 → 自动切「🎵 音频」tab 写入音频字段；上传视频 → 自动切「📹 视频」tab 写入视频字段。
+      // 两个 tab 内容可共存（视频 + 独立音频对口型）。
       let target;
       if (category === 'anchors') {
         target = '#anchors';
@@ -1378,8 +1427,9 @@ export function openRunPoll() {
 }
 
 function refreshReviewOptions() {
-  // 有 manifest 的 run（已完成/生成中）均可进入审核，实时预览已生成的候选
-  const available = store.runs.filter((r) => r.manifest || r.status === 'running');
+  // 有 manifest 的 run（已完成/生成中）均可进入审核，实时预览已生成的候选；
+  // 但失败的 run 不再进入审核（其 manifest 可能是失败前残留的候选，不应继续审核）
+  const available = store.runs.filter((r) => (r.manifest || r.status === 'running') && r.status !== 'failed' && r.status !== 'cancelled');
   const select = $('#review-run');
   if (!select) return;
   const current = select.value;
@@ -1433,7 +1483,14 @@ function _isMediaFile(name) {
 }
 
 function _resolveAudioSource() {
-  // 优先用表单当前的音视频引用（用户最新选择/切换的），表单为空时才回退到已保存任务
+  // 打时间戳的音频来源，优先级：
+  // 1) 音频 tab 选过的「纯音频」（#audio-refs）—— 用户传了音频就用音频本身对口型，最准
+  // 2) 当前 tab 的参考媒体（视频则从视频提取音频）
+  // 3) 已保存任务的 references
+  const audioFile = lines('#audio-refs').find((f) => _isMediaFile(f));
+  if (audioFile) {
+    return { source: 'form', index: 0, file: audioFile };
+  }
   const { files } = _formReferenceFiles();
   const formFile = files.find((f) => _isMediaFile(f));
   if (formFile) {

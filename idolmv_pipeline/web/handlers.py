@@ -17,6 +17,7 @@ from idolmv_pipeline.review.publisher import Publisher, safe_name
 from idolmv_pipeline.seedance.media import extract_audio
 from idolmv_pipeline.video_tasks.factory import adapter_from_task
 from idolmv_pipeline.video_tasks.prompts import build_prompt
+from idolmv_pipeline.video_tasks.planner import ASSET_AVAILABLE
 from idolmv_pipeline.video_tasks.runner import VideoTaskRunner
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web" / "static"
@@ -117,7 +118,12 @@ def serve_file(handler, path: Path, content_type: str | None = None,
         status = 206
 
     handler.send_response(status)
-    handler.send_header("Cache-Control", "no-cache")
+    # 前端 JS/CSS/HTML 用 no-store 强制每次加载最新（避免浏览器缓存旧 JS 导致功能不生效）；
+    # 素材文件（图片/音频/视频）保留 no-cache，允许按需重新验证
+    if resolved.suffix.lower() in (".js", ".css", ".html", ".htm"):
+        handler.send_header("Cache-Control", "no-store")
+    else:
+        handler.send_header("Cache-Control", "no-cache")
     handler.send_header("Content-Type",
                         content_type or mimetypes.guess_type(resolved.name)[0] or "application/octet-stream")
     handler.send_header("Accept-Ranges", "bytes")
@@ -740,9 +746,12 @@ def _task_assets(handler, task_id: str) -> dict:
     decisions = runner._plan_all(assets)
     items = []
     for d in decisions:
+        # asset_id 仅在「存在有效资产（可复用）」时返回；资产缺失/需重传时返回空，
+        # 避免旧 asset id 残留导致 UI 显示"已上传"却实际要重建/重传的困惑
+        valid_asset = d.asset_state == ASSET_AVAILABLE and assets.get(d.asset_key)
         items.append({
             "key": d.asset_key,
-            "asset_id": assets.get(d.asset_key),
+            "asset_id": assets.get(d.asset_key) if valid_asset else None,
             "material_id": d.material_id,
             "action": d.action,
             "reason": d.reason,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -278,8 +279,21 @@ class VideoTaskRunner:
             segments = self._segments(reference)
             pad_mode = segments[0][4] if segments else "back"
             seedance_duration = segments[0][2] if segments else None
-            # 音频上传用的是 audio_file_url（可能为 padded）；transform 按实际产物
-            return {"kind": "audio_padded" if reference.audio_file_url and "padded" in reference.audio_file_url else "audio",
+            # 音频源 = 独立音频（audio_file）或 reference.file（纯音频任务时 file 本身是音频）。
+            # seedance_duration 基于音频源自身时长，避免与视频提取时长不一致导致误判重传。
+            audio_total = None
+            audio_src_name = reference.audio_file or reference.file
+            if audio_src_name:
+                audio_source = self.adapter.task_dir / audio_src_name
+                if audio_source.exists() and re.search(r"\.(mp3|wav|m4a|aac|flac|ogg)$", audio_src_name, re.I):
+                    audio_total = probe_duration(audio_source)
+                    max_dur = self._max_duration_for_model()
+                    seedance_duration = max(4, min(math.ceil(audio_total), max_dur))
+            # kind 判断：独立音频比 seedance_duration 短则会被 pad（audio_padded），
+            # 未 prepare（audio_file_url 未设）时按源时长推断，与 prepare 后产物一致
+            need_pad = (audio_total is not None and seedance_duration is not None and audio_total < seedance_duration) \
+                or (reference.audio_file_url and "padded" in reference.audio_file_url)
+            return {"kind": "audio_padded" if need_pad else "audio",
                     "pad_mode": pad_mode, "seedance_duration": seedance_duration}
         return None
 
@@ -323,13 +337,24 @@ class VideoTaskRunner:
                 artifact_transform = json.loads(seg_marker.read_text()).get("transform")
             except Exception:
                 artifact_transform = None
-        asset_exists = bool(assets.get(key))
-        asset_transform = assets.get(f"{key}__transform")
-        # 兼容旧资产：asset 有 __source（切片指纹）但无 __transform 时，若切片文件未变（指纹一致），视为 asset 匹配
         cached_src = assets.get(f"{key}__source")
-        if asset_exists and asset_transform is None:
-            if _fingerprint_content_same(cached_src, _fingerprint(segment) if segment.exists() else None):
-                asset_transform = desired
+        asset_transform = assets.get(f"{key}__transform")
+        # 判断「云端资产是否对应当前本地产物」——决定能否复用：
+        # - 资产有 __transform：transform 匹配 desired 才算有效
+        # - 旧资产无 __transform：上传时的产物指纹（__source）与当前切片一致才算有效
+        # 复用还必须满足 artifact_valid（本地产物能对应当前源视频，即 marker 签名匹配）。
+        # 若产物未重建/无法确认对应当前源（artifact_valid=False），或资产不对应当前产物（产物已重建、资产是旧的），
+        # 一律视为"无有效资产"，需重新生成/上传，而不是复用旧资产（否则会出现"显示复用、实际用的是旧视频"的误判）。
+        asset_matches_current = False
+        if asset_transform is not None:
+            asset_matches_current = (asset_transform == desired)
+        else:
+            asset_matches_current = _fingerprint_content_same(cached_src, _fingerprint(segment) if segment.exists() else None)
+        # 资产「是否存在」（用于 asset_state / asset_id 显示）：资产存在且对应当前产物 → 视为"已上传"，
+        # 不依赖 artifact_valid（status 面板未 prepare 时无法确认产物，但资产已上传的事实成立）。
+        asset_exists = bool(assets.get(key)) and asset_matches_current
+        # 能否「复用」（REUSE）：还需产物对应当前源（artifact_valid），避免误用残留旧产物
+        asset_transform = desired if (asset_exists and artifact_valid) else None
         return InspectedMaterial(
             material_id=key, asset_key=key,
             source_exists=source_exists,
@@ -379,14 +404,33 @@ class VideoTaskRunner:
                     artifact_transform = None
         asset_exists = bool(assets.get(key))
         asset_transform = assets.get(f"{key}__transform")
-        # 兼容旧资产：asset 有值但无 __transform 时，若音频产物仍有效（源未变），视为 asset 匹配
-        if asset_exists and asset_transform is None and artifact_valid:
-            asset_transform = desired
+        # 判断「云端资产是否对应当前本地产物」——决定能否复用（与 _inspect_reference 一致）：
+        # - 资产有 __transform：transform 匹配 desired 才算有效
+        # - 旧资产无 __transform：上传时的产物指纹（__source）与当前音频产物一致才算有效。
+        #   用 __source.path 定位产物文件比对（该 path 即上传时的产物，可能是 audio_padded.mp3 或 audio.mp3），
+        #   避免用未 prepare 时推断的 audio.mp3 误比对 padded 资产。
+        asset_matches_current = False
+        if asset_transform is not None:
+            asset_matches_current = (asset_transform == desired)
+        else:
+            cached_asset_src = assets.get(f"{key}__source")
+            artifact_path = None
+            if isinstance(cached_asset_src, dict) and cached_asset_src.get("path"):
+                p = Path(cached_asset_src["path"])
+                artifact_path = p if p.is_file() else (audio_path if audio_path is not None and audio_path.exists() else None)
+            elif audio_path is not None and audio_path.exists():
+                artifact_path = audio_path
+            asset_matches_current = _fingerprint_content_same(cached_asset_src, _fingerprint(artifact_path) if artifact_path else None)
+        # 资产「是否存在」（用于 asset_state / asset_id 显示）：资产存在且对应当前产物 → 视为"已上传"，
+        # 不依赖 artifact_valid（status 面板未 prepare 时无法确认产物，但资产已上传的事实成立）。
+        effective_asset_exists = asset_exists and asset_matches_current
+        # 能否「复用」（REUSE）：还需产物对应当前源（artifact_valid），避免误用残留旧产物
+        effective_asset_transform = desired if (effective_asset_exists and artifact_valid) else None
         return InspectedMaterial(
             material_id=key, asset_key=key,
             source_exists=source_exists,
             artifact_valid=artifact_valid, artifact_transform=artifact_transform,
-            asset_exists=asset_exists, asset_transform=asset_transform,
+            asset_exists=effective_asset_exists, asset_transform=effective_asset_transform,
             visibility=VISIBILITY_IDENTIFIABLE if source_exists else VISIBILITY_OPAQUE,
             desired_transform=desired,
         )
