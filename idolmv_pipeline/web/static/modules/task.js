@@ -355,14 +355,22 @@ export function confirmAssetSelection() {
   // 含视频则切视频 tab（视频 tab 为主输入）。
   if (store.assetPickerCategory === 'references') {
     const selected = [...store.assetPickerSelected];
-    const hasVideo = selected.some((f) => /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(f));
+    const isAudioRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
+    const hasVideo = selected.some((f) => !isAudioRe.test(f));
     if (hasVideo) {
+      // 含视频：切视频 tab，只保留视频文件（视频 tab 不放独立音频），丢弃音频并提示
+      const videos = selected.filter((f) => !isAudioRe.test(f));
+      const dropped = selected.length - videos.length;
+      if (dropped) toast(`已忽略 ${dropped} 个音频：视频 tab 不放独立音频，音频以视频提取为准`);
       switchRefTab('video');
       target = '#references';
-    } else {
-      switchRefTab('audio');
-      target = '#audio-refs';
+      $(target).value = videos.join('\n');
+      renderVideoAssetPreviews();
+      closeAssetPicker();
+      return;
     }
+    switchRefTab('audio');
+    target = '#audio-refs';
   }
   $(target).value = [...store.assetPickerSelected].join('\n');
   renderVideoAssetPreviews();
@@ -1282,9 +1290,21 @@ export async function uploadAsset() {
       let uploadedFile = null;
       try { uploadedFile = JSON.parse(xhr.responseText).file; } catch { uploadedFile = null; }
       if (!uploadedFile) uploadedFile = `${category}/${file.name}`;
-      // 根据当前 tab 决定写入视频字段还是音频字段
-      const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
-      const target = category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references');
+      // 参考音视频按「文件类型」自动归位到对应 tab/字段（与「选择文件」一致），
+      // 避免在视频 tab 上传音频被误写进视频字段、或在音频 tab 上传视频被误写进音频字段。
+      let target;
+      if (category === 'anchors') {
+        target = '#anchors';
+      } else {
+        const isAudioFile = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name);
+        if (isAudioFile) {
+          switchRefTab('audio');
+          target = '#audio-refs';
+        } else {
+          switchRefTab('video');
+          target = '#references';
+        }
+      }
       const el = $(target);
       if (el) {
         el.value += `${el.value ? '\n' : ''}${uploadedFile}`;
