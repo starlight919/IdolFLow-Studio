@@ -2,6 +2,14 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-16] - 素材库重构路线图（规划，未实现）
+
+### 📄 文档
+- 新增 `docs/guides/Asset_Library_Roadmap.md`：素材库重构路线图（**待办，未开始实现**）。整合既有 `Asset_Design.md`、`Video_Task_Workflow.md`、`VIDEO_LOCATIONS.md` 等文档与代码现状，规划从「task_dir / file 决定素材身份」迁移到「全局 Library + Immutable Revision + Multi SourceLocation + Global Variant + Remote Asset + Task Binding」的完整路线
+- 路线图按 8 个阶段（Phase 0 Schema/LocationResolver → Phase 7 Source Cleanup/Restore）拆分，每阶段含交付物、验收点、回滚边界，并附核心测试矩阵与三个参考音频场景的显式 model 迁移策略
+- 同步 `Asset_Design.md`「资产显示 vs 复用分离」说明，与 `runner.py` 注释保持一致
+- `docs/README.md` 文档索引新增路线图入口，标注「待办，未实现」
+
 ## [2026-08-15] - Asset 面板源文件变化标记 / 可编辑 Prompt / 参考音视频预览 / 排序优化
 
 ### ✍️ 可编辑 Prompt

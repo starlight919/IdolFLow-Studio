@@ -156,14 +156,15 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
   无 Asset → NEED_MATERIAL_REBIND
 ```
 
-> **「有效 Asset」= 云端资产对应当前本地产物 + 本地产物对应当前源**，判定规则（`_inspect_reference` / `_inspect_audio`），三者同时满足才复用：
-> 1. **资产存在**（`assets.json` 有该 key 的 asset id）；
-> 2. **资产对应当前产物**：资产有 `__transform` → 其 transform 与当前 desired 一致；旧资产无 `__transform` → 上传时的产物指纹 `__source` 与当前本地产物一致（`size + mtime_ns`，忽略 path）；
-> 3. **产物对应当前源**（`artifact_valid`）：本地产物的 marker 签名匹配当前源视频/源音频（源未变、切片有效）。
+> **「资产是否存在」与「能否复用」分离**（`_inspect_reference` / `_inspect_audio`）：
 >
-> 任一不满足即视为"无有效 Asset"，走重建/重传——**避免误判复用旧视频/旧音频**。典型误判场景：
-> - 产物已重建（换 `pad_mode` / 重新切片）而云端资产仍是旧产物 → 不满足 ② → 重传产物；
-> - work 目录残留旧切片、资产 `__source` 匹配旧切片，但**该切片无 marker / 不对应当前源**（如换过源视频但没重新切片）→ 不满足 ③ → 重建并上传。
+> **资产是否存在**（用于 `asset_state` / `asset_id` 显示，"已上传" vs "未上传"）：资产存在 + 资产对应当前产物——
+> 1. 资产存在（`assets.json` 有该 key 的 asset id）；
+> 2. 资产对应当前产物：资产有 `__transform` → 其 transform 与当前 desired 一致；旧资产无 `__transform` → 上传时的产物指纹 `__source` 与当前本地产物一致（`size + mtime_ns`，忽略 path）。
+>
+> 不依赖 `artifact_valid`：status 面板未 prepare 时无法确认产物对应当前源，但"资产已上传"这一事实成立，故仍显示"已上传"+ 返回 `asset_id`。
+>
+> **能否复用**（`REUSE_REMOTE` vs 重传）：在"资产存在"基础上，还要求 **`artifact_valid`**（本地产物 marker 签名匹配当前源）——否则即使资产 `__source` 匹配旧产物，也仅显示"已上传"但 action 走重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`），避免误用残留旧产物。
 
 ### 7.3 阻断
 
@@ -222,7 +223,7 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 | 1 | **源文件删除** | 源缺失时若无法识别内容（无 Snapshot），判定 `NEED_MATERIAL_REBIND` 阻断并提示重选；已上传的云端资源仍有效，但需用户重新提供源文件才能继续 |
 | 2 | **Anchor Asset key 基于位置** | key 由 `anchor-N` 位置决定，调整 Anchor 顺序会使同一张图换 key 而重复上传；稳定 Material ID 为后续优化方向 |
 | 3 | **旧资产无 transform 的兼容** | 有 `__source` 无 `__transform` 时，若产物指纹一致则视为匹配复用；但**产物重建后（`__source` 与当前产物不一致）会视为"无有效资产"走重传**，不复用旧资产 |
-| 4 | **复用三重校验（产物重建/换源防误判）** | **核心防误判**：「有效 Asset」= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配）+ 产物对应当前源（`artifact_valid`，marker 签名匹配）。产物重建或**残留旧切片 + 资产 __source 匹配但产物无 marker/不对应当前源**时，判定 `UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`，而不是误显示「✓ 复用已上传资源」 |
+| 4 | **资产显示与复用分离（产物重建/换源防误判）** | **核心防误判**：「资产是否存在」（显示"已上传"）= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配），**不依赖 `artifact_valid`**（status 面板未 prepare 时仍能显示已上传）；「能否复用」（REUSE_REMOTE）还需 `artifact_valid`（产物 marker 签名匹配当前源）。产物重建或**残留旧切片 + 资产 __source 匹配但产物无 marker/不对应当前源**时，仍显示"已上传"但 action 走重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`），避免误用旧产物 |
 | 5 | **跨任务文件夹隔离** | 资产缓存 `seedance/assets.json` 按**任务文件夹（data_dir）** 独立存放，**跨文件夹不共享、不互相复用**。即使两个文件夹有相同文件名的素材（如同名视频），资产也不通用——避免跨任务串数据；若需跨文件夹复用需引入全局内容指纹去重（后续方向） |
 | 6 | **云端资源持久有效** | Seedance Asset 为持久化云端对象，正常情况下不会失效；🗑 清缓存仅用于确实需要强制重新上传的场景 |
 | 7 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |

@@ -342,9 +342,6 @@ class VideoTaskRunner:
         # 判断「云端资产是否对应当前本地产物」——决定能否复用：
         # - 资产有 __transform：transform 匹配 desired 才算有效
         # - 旧资产无 __transform：上传时的产物指纹（__source）与当前切片一致才算有效
-        # 复用还必须满足 artifact_valid（本地产物能对应当前源视频，即 marker 签名匹配）。
-        # 若产物未重建/无法确认对应当前源（artifact_valid=False），或资产不对应当前产物（产物已重建、资产是旧的），
-        # 一律视为"无有效资产"，需重新生成/上传，而不是复用旧资产（否则会出现"显示复用、实际用的是旧视频"的误判）。
         asset_matches_current = False
         if asset_transform is not None:
             asset_matches_current = (asset_transform == desired)
@@ -353,7 +350,8 @@ class VideoTaskRunner:
         # 资产「是否存在」（用于 asset_state / asset_id 显示）：资产存在且对应当前产物 → 视为"已上传"，
         # 不依赖 artifact_valid（status 面板未 prepare 时无法确认产物，但资产已上传的事实成立）。
         asset_exists = bool(assets.get(key)) and asset_matches_current
-        # 能否「复用」（REUSE）：还需产物对应当前源（artifact_valid），避免误用残留旧产物
+        # 能否「复用」（REUSE_REMOTE）：还需产物对应当前源（artifact_valid），避免误用残留旧产物；
+        # 否则即使资产 __source 匹配旧产物，也仅显示"已上传"但 action 走重传（UPLOAD_EXISTING_ARTIFACT / BUILD_AND_UPLOAD）
         asset_transform = desired if (asset_exists and artifact_valid) else None
         return InspectedMaterial(
             material_id=key, asset_key=key,
