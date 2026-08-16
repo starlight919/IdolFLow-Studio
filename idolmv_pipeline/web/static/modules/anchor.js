@@ -5,7 +5,7 @@
 // the inline anchor form inside the video-task workflow.
 
 import store from './state.js';
-import { api, post } from './api.js';
+import { api, post, uploadFile } from './api.js';
 import { $, $$, toast, escapeHtml, escapeAttr, delay, renderEmptyState, stageName } from './utils.js';
 
 // ── Extracted helpers ──────────────────────────────────────────────────────
@@ -413,7 +413,8 @@ export async function saveAnchorTask(event) {
   if (pending.length) {
     for (const ref of pending) {
       try {
-        const uploaded = await uploadFile(ref._blob, ref.file, 'anchor-references', taskId);
+        // 共享上传实现（api.js），与主工作台「上传素材」同一套超时/进度/错误语义
+        const uploaded = await uploadFile(ref._blob, { taskId, category: 'anchor-references', filename: ref.file });
         // Upload returns path relative to data dir (e.g. "anchors/anchor-references/x.jpg").
         // AnchorTaskStore expects path relative to the anchors/ subdir.
         ref.file = uploaded.file.replace(/^anchors\//, '');
@@ -494,22 +495,6 @@ function showAnchorSaveModeDialog(taskId, editingId) {
       toast('任务已更新');
     } catch (e) { toast(e.message); }
   };
-}
-
-function uploadFile(blob, filename, category, taskId) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/uploads');
-    xhr.setRequestHeader('X-Task-Id', encodeURIComponent(taskId));
-    xhr.setRequestHeader('X-Filename', encodeURIComponent(filename));
-    xhr.setRequestHeader('X-Category', category);
-    xhr.onload = () => {
-      if (xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-      else reject(new Error(JSON.parse(xhr.responseText).error || 'Upload failed'));
-    };
-    xhr.onerror = () => reject(new Error('网络错误'));
-    xhr.send(blob);
-  });
 }
 
 export function resetAnchorForm() {

@@ -56,3 +56,43 @@ export async function getLyricsTimestamps(taskId) {
 export async function saveLyricsTimestamps(taskId, timestamps) {
   return post(`/api/tasks/${taskId}/lyrics-timestamps`, { lyrics_timestamps: timestamps });
 }
+
+/**
+ * 上传素材文件到任务文件夹（POST /api/uploads，raw body）。
+ * 主工作台「上传素材」与 Anchor 生成器「本机上传」共用这一份实现，
+ * 保证超时/进度/错误语义一致。调用方只负责选目标字段和 UI 反馈。
+ *
+ * @param {Blob|File} file 要上传的文件内容
+ * @param {object} opts
+ * @param {string} opts.taskId 任务文件夹（data_root 下的目录名）
+ * @param {string} opts.category anchors | references | anchor-references
+ * @param {string} [opts.filename] 覆盖文件名（默认取 file.name）
+ * @param {(percent:number)=>void} [opts.onProgress] 上传进度回调（0-100）
+ * @param {number} [opts.timeoutMs] 超时（默认 120000）
+ * @returns {Promise<{file:string,size:number}>} 服务器落盘后的相对路径与大小
+ */
+export function uploadFile(file, { taskId, category, filename, onProgress, timeoutMs = 120000 }) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/uploads');
+    xhr.timeout = timeoutMs;
+    xhr.setRequestHeader('X-Task-Id', encodeURIComponent(taskId));
+    xhr.setRequestHeader('X-Filename', encodeURIComponent(filename || file.name));
+    xhr.setRequestHeader('X-Category', category);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* 非 JSON 响应 */ }
+      if (xhr.status < 300) {
+        resolve(data);
+      } else {
+        reject(new Error(data.error || `上传失败 (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('上传失败：网络错误或服务未响应'));
+    xhr.ontimeout = () => reject(new Error('上传超时，请重试'));
+    xhr.send(file);
+  });
+}

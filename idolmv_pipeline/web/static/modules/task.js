@@ -2,7 +2,7 @@
 // ==========================================================================
 
 import store from './state.js';
-import { api, post, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
+import { api, post, uploadFile, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
 import { $, $$, toast, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
 
 // ── Task Folder Relative Path ───────────────────────────────────────────────
@@ -93,11 +93,11 @@ export async function checkTaskFolderEmpty() {
 export function updateUploadState() {
   const hasDir = !!taskFolderRelative();
   const uploadBtn = $('#upload-btn');
-  const uploadFile = $('#upload-file');
+  const uploadInput = $('#upload-file');
   const uploadCategory = $('#upload-category');
   const needDirHint = '请先选择任务文件夹（步骤 1），再上传素材';
   if (uploadBtn) { uploadBtn.disabled = !hasDir; uploadBtn.title = hasDir ? '' : needDirHint; }
-  if (uploadFile) { uploadFile.disabled = !hasDir; uploadFile.title = hasDir ? '' : needDirHint; }
+  if (uploadInput) { uploadInput.disabled = !hasDir; uploadInput.title = hasDir ? '' : needDirHint; }
   if (uploadCategory) { uploadCategory.disabled = !hasDir; uploadCategory.title = hasDir ? '' : needDirHint; }
 }
 
@@ -1411,68 +1411,47 @@ export async function uploadAsset() {
   if (!file || !id) return toast('请先选择任务文件夹并选择文件');
 
   _autoSetUploadCategory(file);
-  let category = $('#upload-category').value;
+  const category = $('#upload-category').value;
   const statusEl = $('#upload-status');
   if (statusEl) statusEl.textContent = '上传中…';
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/uploads');
-  xhr.timeout = 120000; // 2 分钟超时
-  xhr.setRequestHeader('X-Task-Id', encodeURIComponent(id));
-  xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
-  xhr.setRequestHeader('X-Category', category);
-  xhr.upload.onprogress = (e) => {
-    if (statusEl && e.lengthComputable) statusEl.textContent = `${Math.round((e.loaded / e.total) * 100)}%`;
-  };
-  xhr.onload = () => {
-    let errorMsg = null;
-    if (xhr.status < 300) {
-      // 后端返回的实际相对路径（例如 anchors/<filename>），优先使用，避免前后端路径不一致
-      let uploadedFile = null;
-      try { uploadedFile = JSON.parse(xhr.responseText).file; } catch { uploadedFile = null; }
-      if (!uploadedFile) uploadedFile = `${category}/${file.name}`;
-      // 参考音视频按「文件类型」自动切到对应 tab 并写入字段：
-      // 上传音频 → 自动切「🎵 音频」tab 写入音频字段；上传视频 → 自动切「📹 视频」tab 写入视频字段。
-      // 两个 tab 内容可共存（视频 + 独立音频对口型）。
-      let target;
-      if (category === 'anchors') {
-        target = '#anchors';
-      } else {
-        const isAudioFile = isAudioName(file.name);
-        if (isAudioFile) {
-          switchRefTab('audio');
-          target = '#audio-refs';
-        } else {
-          switchRefTab('video');
-          target = '#references';
-        }
-      }
-      const el = $(target);
-      if (el) {
-        _mergeIntoField(target, [uploadedFile], { fillBlank: target === '#audio-refs' });
-      }
-      if (statusEl) statusEl.textContent = '完成';
-      renderVideoAssetPreviews();
-      checkTaskFolderEmpty();
-      toast('上传完成');
-      // 清空文件选择框，便于连续上传；几秒后自动清空状态
-      const fileInput = $('#upload-file');
-      if (fileInput) fileInput.value = '';
-      setTimeout(() => { if (statusEl && statusEl.textContent === '完成') statusEl.textContent = ''; }, 3000);
+  try {
+    // 共享上传实现（api.js），与 Anchor 生成器的「本机上传」同一套超时/进度/错误语义
+    const result = await uploadFile(file, {
+      taskId: id,
+      category,
+      onProgress: (p) => { if (statusEl) statusEl.textContent = `${p}%`; },
+    });
+    // 后端返回的实际相对路径（例如 anchors/<filename>），优先使用，避免前后端路径不一致
+    const uploadedFile = result.file || `${category}/${file.name}`;
+    // 参考音视频按「文件类型」自动切到对应 tab 并写入字段：
+    // 上传音频 → 自动切「🎵 音频」tab 写入音频字段；上传视频 → 自动切「📹 视频」tab 写入视频字段。
+    // 两个 tab 内容可共存（视频 + 独立音频对口型）。
+    let target;
+    if (category === 'anchors') {
+      target = '#anchors';
     } else {
-      try { errorMsg = JSON.parse(xhr.responseText).error; } catch { errorMsg = `上传失败 (${xhr.status})`; }
-      if (statusEl) statusEl.textContent = '';
-      toast(errorMsg);
+      const isAudioFile = isAudioName(file.name);
+      if (isAudioFile) {
+        switchRefTab('audio');
+        target = '#audio-refs';
+      } else {
+        switchRefTab('video');
+        target = '#references';
+      }
     }
-  };
-  xhr.onerror = () => {
+    _mergeIntoField(target, [uploadedFile], { fillBlank: target === '#audio-refs' });
+    if (statusEl) statusEl.textContent = '完成';
+    renderVideoAssetPreviews();
+    checkTaskFolderEmpty();
+    toast('上传完成');
+    // 清空文件选择框，便于连续上传；几秒后自动清空状态
+    const fileInput = $('#upload-file');
+    if (fileInput) fileInput.value = '';
+    setTimeout(() => { if (statusEl && statusEl.textContent === '完成') statusEl.textContent = ''; }, 3000);
+  } catch (e) {
     if (statusEl) statusEl.textContent = '';
-    toast('上传失败：网络错误或服务未响应');
-  };
-  xhr.ontimeout = () => {
-    if (statusEl) statusEl.textContent = '';
-    toast('上传超时，请重试');
-  };
-  xhr.send(file);
+    toast(e.message);
+  }
 }
 
 // ── Runs ────────────────────────────────────────────────────────────────────

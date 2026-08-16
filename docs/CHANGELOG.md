@@ -2,6 +2,13 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-16] - 统一主工作台与 Anchor 生成器的上传实现
+
+### ♻️ 前端重构
+- **上传逻辑收敛到 `api.js` 的 `uploadFile()`**：此前主工作台「上传素材」（`task.js` 内联 XHR）与 Anchor 生成器「本机上传」（`anchor.js` 本地 `uploadFile`）是两套独立实现，超时/进度/错误语义不一致（anchor 侧无超时、错误信息不解析服务端 `error`）。现抽为 API 层唯一的 `uploadFile(file, {taskId, category, filename, onProgress, timeoutMs})`，两个页面共用；后端 `/api/uploads` 无改动
+- Anchor 保存时的延迟上传（`_blob` 在 `saveAnchorTask` 落盘）同样走共享实现，获得超时与一致的错误提示
+- 顺带修复 `updateUploadState` 中局部变量 `uploadFile` 遮蔽共享函数导入的隐患（重命名为 `uploadInput`）
+
 ## [2026-08-16] - 路线图收敛为保守版 + 前后端逻辑漏洞修复
 
 ### 🗺️ 路线图收敛（`Asset_Library_Roadmap.md` v2）
