@@ -131,14 +131,56 @@ class VideoTaskRunner:
                 errors.append("singing task requires lyrics_file or metadata.lyrics_text")
         return errors
 
+    # ── work 产物双路径 ──────────────────────────────────────────────────────
+    # 新路径 = 任务级 work 目录（<dir>/<task>/<ref>/，多任务共文件夹互不覆盖）；
+    # 旧路径 = 文件夹级共享目录（<dir>/<ref>/，历史产物所在地），只读回退：
+    # 存量产物与 marker 继续有效（复用证明不失效、不触发一次性重传），重建才写新路径。
+
+    def _work_artifact(self, reference: ReferenceSpec, filename: str) -> tuple[Path, Path | None]:
+        new = self.adapter.work_dir / reference.name / filename
+        legacy_dir = self.adapter.metadata.get("legacy_work_dir")
+        old = (Path(legacy_dir) / reference.name / filename) if legacy_dir else None
+        return new, old
+
+    def _artifact_target(self, reference: ReferenceSpec, filename: str) -> Path:
+        """重建时的写入目标（永远写任务级新路径）。"""
+        return self._work_artifact(reference, filename)[0]
+
+    def _artifact_existing(self, reference: ReferenceSpec, filename: str) -> Path:
+        """读取/上传用的现存产物路径：新路径优先，回退旧共享路径。"""
+        new, old = self._work_artifact(reference, filename)
+        if new.exists():
+            return new
+        if old and old.exists():
+            return old
+        return new
+
+    def _read_json_any(self, reference: ReferenceSpec, filename: str):
+        """从新/旧两处读 marker JSON，先新后旧；都没有返回 None。"""
+        for path in self._work_artifact(reference, filename):
+            if path and path.exists():
+                try:
+                    return json.loads(path.read_text())
+                except Exception:
+                    return None
+        return None
+
+    def _read_signature_any(self, reference: ReferenceSpec, marker_name: str) -> str | None:
+        for path in self._work_artifact(reference, marker_name):
+            if path and path.exists():
+                sig = _read_signature(path)
+                if sig:
+                    return sig
+        return None
+
     def _reference_audio(self, reference: ReferenceSpec) -> Path:
-        return self.adapter.work_dir / reference.name / "audio.mp3"
+        return self._artifact_existing(reference, "audio.mp3")
 
     def _reference_audio_padded(self, reference: ReferenceSpec) -> Path:
-        return self.adapter.work_dir / reference.name / "audio_padded.mp3"
+        return self._artifact_existing(reference, "audio_padded.mp3")
 
     def _reference_segment(self, reference: ReferenceSpec, index: int = 0) -> Path:
-        return self.adapter.work_dir / reference.name / f"segment_{index:02d}.mp4"
+        return self._artifact_existing(reference, f"segment_{index:02d}.mp4")
 
     def _max_duration_for_model(self) -> int:
         model = self.adapter.model or "sd2.5"
@@ -171,19 +213,16 @@ class VideoTaskRunner:
         self._progress("preparing", "正在处理参考视频和音频")
         for reference in self.adapter.references:
             segments = self._segments(reference)
-            audio = self._reference_audio(reference)
+            # 写入走任务级新路径；现存产物（新或旧共享路径）有效则直接复用，不重建不搬迁
+            audio = self._artifact_target(reference, "audio.mp3")
+            audio_cur = self._artifact_existing(reference, "audio.mp3")
             source = self.adapter.task_dir / (reference.audio_file or reference.file)
             # 用源文件指纹判断是否需要重新生成音频缓存，避免切换音视频后沿用旧的 work_dir 缓存
             fingerprint_marker = audio.with_name("audio.src.json")
             current_fp = _fingerprint(source) if source.exists() else None
-            cached_fp = None
-            if fingerprint_marker.exists():
-                try:
-                    cached_fp = json.loads(fingerprint_marker.read_text())
-                except Exception:
-                    cached_fp = None
+            cached_fp = self._read_json_any(reference, "audio.src.json")
             audio_refreshed = False
-            if not audio.exists() or cached_fp != current_fp:
+            if not audio_cur.exists() or cached_fp != current_fp:
                 if reference.pass_reference_video:
                     # 视频模式：从视频提取音频
                     extract_audio(source, audio)
@@ -196,31 +235,35 @@ class VideoTaskRunner:
                     # 源缺失时清掉过期标记，避免残留指纹让后续 inspect 误判缓存仍有效
                     fingerprint_marker.unlink(missing_ok=True)
                 audio_refreshed = True
+                audio_cur = audio
             pad_mode = segments[0][4] if segments else "back"
             if segments and len(segments) == 1:
                 seedance_duration = segments[0][2]
-                actual = probe_duration(audio)
+                actual = probe_duration(audio_cur)
                 if actual < seedance_duration and reference.pass_reference_audio:
-                    padded = self._reference_audio_padded(reference)
+                    padded = self._artifact_target(reference, "audio_padded.mp3")
+                    padded_cur = self._artifact_existing(reference, "audio_padded.mp3")
                     # 补齐音频的内容依赖 pad_mode + seedance_duration + 源音频，用 Artifact Signature 判断是否重建
                     padded_transform = {"kind": "audio_padded", "pad_mode": pad_mode, "seedance_duration": seedance_duration}
                     padded_signature = _artifact_signature(current_fp, padded_transform)
                     padded_marker = padded.with_name("audio_padded.src.json")
-                    cached_padded_sig = _read_signature(padded_marker)
-                    if not padded.exists() or audio_refreshed or cached_padded_sig != padded_signature:
-                        pad_audio_to(audio, padded, seedance_duration, pad_mode=pad_mode)
+                    cached_padded_sig = self._read_signature_any(reference, "audio_padded.src.json")
+                    if not padded_cur.exists() or audio_refreshed or cached_padded_sig != padded_signature:
+                        pad_audio_to(audio_cur, padded, seedance_duration, pad_mode=pad_mode)
                         _write_marker(padded_marker, padded_signature, current_fp, padded_transform)
-                    object.__setattr__(reference, 'audio_file_url', str(padded.resolve()))
+                        padded_cur = padded
+                    object.__setattr__(reference, 'audio_file_url', str(padded_cur.resolve()))
                 elif reference.pass_reference_audio and not reference.audio_file_url:
-                    object.__setattr__(reference, 'audio_file_url', str(audio.resolve()))
+                    object.__setattr__(reference, 'audio_file_url', str(audio_cur.resolve()))
             elif reference.pass_reference_audio and not reference.audio_file_url:
-                object.__setattr__(reference, 'audio_file_url', str(audio.resolve()))
+                object.__setattr__(reference, 'audio_file_url', str(audio_cur.resolve()))
             # 纯口型模式（pass_reference_video=False）下 reference.file 是纯音频文件，
             # 不做视频切片/check frame，只准备音频（上面已处理）。
             if not reference.pass_reference_video:
                 continue
             for index, (start, duration, _, original_total, seg_pad_mode) in enumerate(segments):
-                segment = self._reference_segment(reference, index)
+                segment = self._artifact_target(reference, f"segment_{index:02d}.mp4")
+                segment_cur = self._artifact_existing(reference, f"segment_{index:02d}.mp4")
                 seg_source = self.adapter.task_dir / reference.file
                 seg_fp = _fingerprint(seg_source) if seg_source.exists() else None
                 seg_marker = segment.with_name(f"segment_{index:02d}.src.json")
@@ -235,13 +278,14 @@ class VideoTaskRunner:
                     "original_duration": original_total,
                 }
                 seg_signature = _artifact_signature(seg_fp, seg_transform)
-                cached_seg_sig = _read_signature(seg_marker)
-                if not segment.exists() or cached_seg_sig != seg_signature:
+                cached_seg_sig = self._read_signature_any(reference, f"segment_{index:02d}.src.json")
+                if not segment_cur.exists() or cached_seg_sig != seg_signature:
                     trim_reference(seg_source, segment, start, duration, reference.crop_filter, pad_mode=seg_pad_mode, original_duration=original_total)
                     _write_marker(seg_marker, seg_signature, seg_fp, seg_transform)
-                check_frame = segment.with_name(f"segment_{index:02d}_check.jpg")
+                    segment_cur = segment
+                check_frame = segment_cur.with_name(f"segment_{index:02d}_check.jpg")
                 if not check_frame.exists():
-                    extract_check_frame(segment, check_frame)
+                    extract_check_frame(segment_cur, check_frame)
 
     def _load_assets(self) -> dict:
         return json.loads(self.adapter.assets_file.read_text()) if self.adapter.assets_file.exists() else {}
@@ -252,11 +296,100 @@ class VideoTaskRunner:
         temporary.write_text(json.dumps(assets, indent=2, ensure_ascii=False))
         temporary.replace(self.adapter.assets_file)
 
+    def _append_asset_ledger(self, key: str, path: Path, assets: dict) -> None:
+        """资产台账（append-only）：每次上传成功追加一行，永不删除、清缓存不清除。
+
+        assets.json 里的记录会被后续重传覆盖（同 key 换内容时理应如此），台账是
+        唯一完整历史：任何被覆盖的 asset_id 都能按任务/key/指纹/transform 找回。"""
+        try:
+            entry = {
+                "time": datetime.now().isoformat(timespec="seconds"),
+                "task": self.adapter.name,
+                "key": key,
+                "asset_id": assets.get(key),
+                "source": assets.get(f"{key}__source"),
+                "transform": assets.get(f"{key}__transform"),
+                "artifact": str(path),
+            }
+            ledger = self.adapter.assets_file.parent / "asset_ledger.jsonl"
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            with ledger.open("a", encoding="utf-8") as output:
+                output.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            # 台账写失败不阻断上传主流程
+            logger.warning("asset ledger append failed for %s", key, exc_info=True)
+
     def _anchor_asset_key(self, anchor: AnchorSpec) -> str:
-        return self.adapter.metadata.get("anchor_asset_keys", {}).get(anchor.key, f"anchor_{anchor.key}")
+        # key 按任务隔离（多任务共文件夹时，各任务的素材互不抢 key、不互相顶缓存）；
+        # 显式 anchor_asset_keys 映射优先（保持自定义能力，格式不变）
+        custom = self.adapter.metadata.get("anchor_asset_keys", {}).get(anchor.key)
+        if custom:
+            return custom
+        return f"anchor_{_safe(self.adapter.name)}_{anchor.key}"
 
     def _reference_asset_key(self, reference: ReferenceSpec, index: int) -> str:
-        return self.adapter.metadata.get("reference_asset_keys", {}).get(f"{reference.name}:{index}", f"reference_{reference.name}_{index:02d}")
+        custom = self.adapter.metadata.get("reference_asset_keys", {}).get(f"{reference.name}:{index}")
+        if custom:
+            return custom
+        return f"reference_{_safe(self.adapter.name)}_{reference.name}_{index:02d}"
+
+    def _audio_asset_key(self, reference: ReferenceSpec) -> str:
+        return f"{_safe(self.adapter.name)}_{reference.name}:audio"
+
+    def _legacy_asset_keys(self, anchor: AnchorSpec | None = None, reference: ReferenceSpec | None = None, index: int | None = None) -> list[str]:
+        """旧版（按文件夹位置命名、无任务前缀）的 key 列表，作只读回退用。"""
+        keys = []
+        if anchor is not None:
+            keys.append(f"anchor_{anchor.key}")
+        if reference is not None and index is not None:
+            keys.append(f"reference_{reference.name}_{index:02d}")
+        if reference is not None:
+            keys.append(f"{reference.name}:audio")
+        return keys
+
+    def _virtualize_legacy_keys(self, assets: dict) -> bool:
+        """把旧 key 的条目在内存里映射到新 key（不改动旧条目本身）。
+
+        复用判定与提交都统一走新 key；upload 阶段如有写入会顺带把虚拟化
+        结果落盘，状态面板每次计划前也会虚拟化，保证显示与决策一致。"""
+        changed = False
+        for anchor in self.adapter.anchors:
+            new_key = self._anchor_asset_key(anchor)
+            if assets.get(new_key):
+                continue
+            for legacy in self._legacy_asset_keys(anchor=anchor):
+                if assets.get(legacy):
+                    for suffix in ("", "__source", "__transform"):
+                        if f"{legacy}{suffix}" in assets:
+                            assets[f"{new_key}{suffix}"] = assets[f"{legacy}{suffix}"]
+                    changed = True
+                    break
+        for reference in self.adapter.references:
+            # 探测失败（如源缺失，Status 容错路径）不阻断虚拟化：视频引用退化为 1 段（与
+            # 后续 plan 的行为一致，plan 自身会暴露问题），纯音频引用无分段
+            try:
+                seg_count = len(self._segments(reference))
+            except Exception:
+                seg_count = 1 if reference.pass_reference_video else 0
+            for index in range(seg_count):
+                new_key = self._reference_asset_key(reference, index)
+                if assets.get(new_key):
+                    continue
+                legacy = f"reference_{reference.name}_{index:02d}"
+                if assets.get(legacy):
+                    for suffix in ("", "__source", "__transform"):
+                        if f"{legacy}{suffix}" in assets:
+                            assets[f"{new_key}{suffix}"] = assets[f"{legacy}{suffix}"]
+                    changed = True
+            new_audio = self._audio_asset_key(reference)
+            if not assets.get(new_audio):
+                legacy_audio = f"{reference.name}:audio"
+                if assets.get(legacy_audio):
+                    for suffix in ("", "__source", "__transform"):
+                        if f"{legacy_audio}{suffix}" in assets:
+                            assets[f"{new_audio}{suffix}"] = assets[f"{legacy_audio}{suffix}"]
+                    changed = True
+        return changed
 
     # ─────────────────────────────────────────────────────────────
     # Phase 2：Planner 决策（plan → prepare required → upload required）
@@ -300,20 +433,83 @@ class VideoTaskRunner:
                     "pad_mode": pad_mode, "seedance_duration": seedance_duration}
         return None
 
+    def _anchor_alias_key(self, anchor: AnchorSpec, assets: dict, current_src: dict | None) -> str | None:
+        """在 assets 里找「内容指纹与当前源文件一致」的其他 anchor 条目。
+
+        两个复用场景都靠它：跨文件夹复制时迁移过来的条目（key 是源任务的位置键，
+        未必等于本任务的位置键）、同文件夹内调整 anchor 顺序（同一张图换了
+        anchor-N 位置键）。segment/audio 条目的 __source 是 runtime/work 产物指纹，
+        不会与源文件一致；再以 transform 限定 anchor 类双保险，不会错配。"""
+        if current_src is None:
+            return None
+        own_key = self._anchor_asset_key(anchor)
+        for k in assets:
+            if k == own_key or k.endswith("__source") or k.endswith("__transform"):
+                continue
+            fp = assets.get(f"{k}__source")
+            if not isinstance(fp, dict) or not _fingerprint_content_same(fp, current_src):
+                continue
+            # 第三道闸：segment/audio 的 __source.path 指向 runtime/work 产物，一律排除。
+            # 即使指纹碰巧相等也不认领——错复用的代价（生成用错素材）远大于多传一次
+            if "/runtime/work/" in str(fp.get("path", "")).replace("\\", "/"):
+                continue
+            transform = assets.get(f"{k}__transform")
+            if transform not in (None, {"kind": "anchor"}):
+                continue
+            if assets.get(k):
+                return k
+        return None
+
+    def _adopt_anchor_aliases(self, assets: dict, persist: bool = False) -> bool:
+        """把「内容指纹命中别名条目」的 anchor 在名义 key 下落账。
+
+        inspect 阶段决策可走别名资产，但提交/显示统一读名义 key（submit 里
+        assets[self._anchor_asset_key(anchor)]），所以在 upload/状态展示前把
+        别名的 asset_id 与边车键复制到名义 key 下；persist=True 时写回 assets.json。"""
+        changed = False
+        for anchor in self.adapter.anchors:
+            key = self._anchor_asset_key(anchor)
+            path = self.adapter.task_dir / anchor.file
+            if not path.is_file() or assets.get(key):
+                continue
+            alias = self._anchor_alias_key(anchor, assets, _fingerprint(path))
+            if alias is None:
+                continue
+            assets[key] = assets[alias]
+            assets[f"{key}__source"] = _fingerprint(path)
+            assets[f"{key}__transform"] = assets.get(f"{alias}__transform", {"kind": "anchor"})
+            changed = True
+        if changed and persist:
+            self._save_assets(assets)
+        return changed
+
     def _inspect_anchor(self, anchor: AnchorSpec, assets: dict) -> InspectedMaterial:
         key = self._anchor_asset_key(anchor)
         path = self.adapter.task_dir / anchor.file
         source_exists = path.exists()
         desired = self._resolve_transform("anchor")
-        asset_exists = bool(assets.get(key))
-        # anchor 无独立产物；用「上传时源指纹 vs 当前源指纹」判断源图是否变化（忽略 path，仅看内容）
-        cached_src = assets.get(f"{key}__source")
         current_src = _fingerprint(path) if source_exists else None
+        # 名义 key 的缓存记录
+        cached_src = assets.get(f"{key}__source")
+        asset_exists = bool(assets.get(key))
+        asset_transform = assets.get(f"{key}__transform") if asset_exists else None
+        # 名义 key 指纹不匹配（或无记录）时按内容指纹找别名条目复用
+        # （跨文件夹复制迁移 / 同文件夹换位），提交阶段由 _adopt_anchor_aliases 落账
+        if source_exists and not _fingerprint_content_same(cached_src, current_src):
+            alias = self._anchor_alias_key(anchor, assets, current_src)
+            if alias is not None:
+                cached_src = assets.get(f"{alias}__source")
+                asset_exists = bool(assets.get(alias))
+                asset_transform = assets.get(f"{alias}__transform")
+        # anchor 的上传产物就是源文件本身：指纹不匹配 = 云端是旧图。
+        # anchor 的 transform 恒为 {"kind":"anchor"}，若只看 transform 相等会把
+        # 已编辑的源图误判为可复用，这里置空 asset_transform 强制走重传判定
+        if asset_exists and not _fingerprint_content_same(cached_src, current_src):
+            asset_transform = None
         artifact_valid = source_exists and _fingerprint_content_same(cached_src, current_src)
         artifact_transform = desired if source_exists else None
-        asset_transform = assets.get(f"{key}__transform")
         # 兼容旧资产：asset 有 __source 但无 __transform 时，若源指纹一致则视为匹配（不误判重传）
-        if asset_exists and asset_transform is None and _fingerprint_content_same(cached_src, current_src):
+        if asset_exists and asset_transform is None and artifact_valid:
             asset_transform = desired
         return InspectedMaterial(
             material_id=key, asset_key=key,
@@ -329,17 +525,13 @@ class VideoTaskRunner:
         seg_source = self.adapter.task_dir / reference.file
         source_exists = seg_source.exists()
         segment = self._reference_segment(reference, index)
-        seg_marker = segment.with_name(f"segment_{index:02d}.src.json")
         desired = self._resolve_transform("segment", reference, index)
         desired_sig = _artifact_signature(_fingerprint(seg_source) if source_exists else None, desired) if desired else None
-        cached_sig = _read_signature(seg_marker)
+        # marker 从新（任务级）/旧（文件夹级共享）两处读，任一签名匹配即产物有效
+        cached_sig = self._read_signature_any(reference, f"segment_{index:02d}.src.json")
         artifact_valid = source_exists and segment.exists() and cached_sig is not None and cached_sig == desired_sig
-        artifact_transform = None
-        if seg_marker.exists():
-            try:
-                artifact_transform = json.loads(seg_marker.read_text()).get("transform")
-            except Exception:
-                artifact_transform = None
+        marker_data = self._read_json_any(reference, f"segment_{index:02d}.src.json")
+        artifact_transform = marker_data.get("transform") if isinstance(marker_data, dict) else None
         cached_src = assets.get(f"{key}__source")
         asset_transform = assets.get(f"{key}__transform")
         # 判断「云端资产是否对应当前本地产物」——决定能否复用：
@@ -366,7 +558,7 @@ class VideoTaskRunner:
         )
 
     def _inspect_audio(self, reference: ReferenceSpec, assets: dict) -> InspectedMaterial:
-        key = f"{reference.name}:audio"
+        key = self._audio_asset_key(reference)
         source = self.adapter.task_dir / (reference.audio_file or reference.file)
         source_exists = source.exists()
         desired = self._resolve_transform("audio", reference)
@@ -376,39 +568,29 @@ class VideoTaskRunner:
             audio_path = Path(reference.audio_file_url)
         else:
             audio_path = self._reference_audio(reference)
-        cached_sig = _read_signature(audio_path.with_name("audio_padded.src.json")) if audio_path else None
+        cached_sig = self._read_signature_any(reference, "audio_padded.src.json") if audio_path else None
         # 音频产物是否有效：源音频未变 + 产物存在（或用 padded marker 签名匹配）
         current_src = _fingerprint(source) if source_exists else None
         # 源标记按「实际要上传的产物」选择：补齐时长时上传 audio_padded.mp3，否则上传 audio.mp3。
         # 这样能避免 audio.src.json 被上一次用不同源（如临时切到某视频提取音频）污染后误判当前源失效。
         want_padded = bool(desired and desired.get("kind") == "audio_padded")
         src_marker_name = "audio_padded.src.json" if want_padded else "audio.src.json"
-        audio_src_marker = audio_path.with_name(src_marker_name) if audio_path else None
+        cached_audio_src_data = self._read_json_any(reference, src_marker_name) if audio_path else None
         cached_audio_src = None
-        if audio_src_marker and audio_src_marker.exists():
-            try:
-                data = json.loads(audio_src_marker.read_text())
-                cached_audio_src = data.get("source") if "source" in data else data
-            except Exception:
-                cached_audio_src = None
+        if isinstance(cached_audio_src_data, dict):
+            cached_audio_src = cached_audio_src_data.get("source") if "source" in cached_audio_src_data else cached_audio_src_data
         # 产物存在性：按 want_padded 检查实际要上传的文件（audio_padded.mp3 或 audio.mp3）
-        artifact_file = audio_path.with_name("audio_padded.mp3") if (want_padded and audio_path) else audio_path
+        artifact_file = self._artifact_existing(reference, "audio_padded.mp3") if want_padded else audio_path
         artifact_valid = (source_exists and artifact_file is not None and artifact_file.exists()
                           and cached_audio_src is not None and cached_audio_src == current_src)
         artifact_transform = None
-        marker_path = audio_path.with_name("audio_padded.src.json") if audio_path else None
-        if marker_path and marker_path.exists():
-            try:
-                artifact_transform = json.loads(marker_path.read_text()).get("transform")
-            except Exception:
-                artifact_transform = None
-        if artifact_transform is None and audio_path is not None:
-            marker_path2 = audio_path.with_name("audio.src.json")
-            if marker_path2.exists():
-                try:
-                    artifact_transform = json.loads(marker_path2.read_text()).get("transform") or {"kind": "audio"}
-                except Exception:
-                    artifact_transform = None
+        padded_marker_data = self._read_json_any(reference, "audio_padded.src.json")
+        if isinstance(padded_marker_data, dict):
+            artifact_transform = padded_marker_data.get("transform")
+        if artifact_transform is None:
+            audio_marker_data = self._read_json_any(reference, "audio.src.json")
+            if isinstance(audio_marker_data, dict):
+                artifact_transform = audio_marker_data.get("transform") or {"kind": "audio"}
         asset_exists = bool(assets.get(key))
         asset_transform = assets.get(f"{key}__transform")
         # 判断「云端资产是否对应当前本地产物」——决定能否复用（与 _inspect_reference 一致）：
@@ -443,6 +625,9 @@ class VideoTaskRunner:
         )
 
     def _plan_all(self, assets: dict) -> list[AssetDecision]:
+        # 旧 key（无任务前缀）先虚拟映射到新 key：存量缓存继续可用，写入走新 key。
+        # 状态面板与 upload 都经由这里，保证显示与决策一致
+        self._virtualize_legacy_keys(assets)
         decisions = []
         for anchor in self.adapter.anchors:
             decisions.append(plan_material(self._inspect_anchor(anchor, assets)))
@@ -460,12 +645,18 @@ class VideoTaskRunner:
 
     def upload(self, provider: str = "auto") -> dict:
         assets = self._load_assets()
+        # 旧 key → 新 key 的虚拟映射先落盘（纯复用运行也固化，后续面板/运行直达新 key）
+        if self._virtualize_legacy_keys(assets):
+            self._save_assets(assets)
         decisions = self._plan_all(assets)
         # 阻断：任何素材不可提交则整体失败
         blocked = [d for d in decisions if not d.can_submit]
         if blocked:
             reasons = "; ".join(f"{d.asset_key}: {d.block_reason}" for d in blocked)
             raise RuntimeError(f"素材无法提交：{reasons}")
+        # anchor 走别名资产复用（跨文件夹迁移 / 同文件夹换位）时，先把别名落到名义
+        # key 下再继续——submit 阶段统一按名义 key 取 asset_id，不落账会 KeyError
+        self._adopt_anchor_aliases(assets, persist=True)
         # 需要重建产物的素材存在 → 执行 prepare（Phase 2 暂保持全局 prepare）
         if any(d.action == BUILD_AND_UPLOAD for d in decisions):
             self.prepare()
@@ -500,8 +691,7 @@ class VideoTaskRunner:
                 name = f"video_{_safe(self.adapter.name)}_{_safe(anchor.key)}"
                 asset_type = "Image"
             elif kind == "audio":
-                ref_name = key[: -len(":audio")]
-                reference = next((r for r in self.adapter.references if r.name == ref_name), None)
+                reference = next((r for r in self.adapter.references if self._audio_asset_key(r) == key), None)
                 if reference is None:
                     continue
                 path = Path(reference.audio_file_url) if reference.audio_file_url else self._reference_audio(reference)
@@ -549,6 +739,8 @@ class VideoTaskRunner:
             assets[f"{key}__source"] = _fingerprint(path)
             assets[f"{key}__transform"] = transform
             self._save_assets(assets)
+            # 上传成功即入台账（append-only，永不删除）：记录被覆盖后仍可据此找回 asset_id
+            self._append_asset_ledger(key, path, assets)
         self._progress("uploading", "素材上传完成", completed=total, total=total)
         return assets
 
@@ -603,6 +795,13 @@ class VideoTaskRunner:
             raise ValueError("Invalid video task:\n- " + "\n- ".join(errors))
         assets = self.upload(provider)
         state = self._state(run_id)
+        # 运行快照：记录本次提交实际使用的 asset_id（含 transform），写入 run.json。
+        # 之后 assets.json 记录被覆盖/清理，每次生成用的是什么资产仍有据可查
+        state.update(assets_used={
+            key: {"asset_id": value, "transform": assets.get(f"{key}__transform")}
+            for key, value in assets.items()
+            if not key.endswith("__source") and not key.endswith("__transform")
+        })
         count = candidates or self.adapter.candidate_policy.count
         existing = {job["id"] for job in state.jobs()}
         total = len(self.adapter.anchors) * len(self.adapter.references) * count
@@ -620,7 +819,7 @@ class VideoTaskRunner:
                 # 传参考视频（非纯口型模式）
                 if ref.pass_reference_video:
                     content.append({"type": "video_url", "video_url": {"url": f"asset://{assets[self._reference_asset_key(ref, 0)]}"}, "role": "reference_video"})
-                audio_asset_key = f"{ref.name}:audio"
+                audio_asset_key = self._audio_asset_key(ref)
                 if ref.audio_file_url and audio_asset_key in assets:
                     content.append({"type": "audio_url", "audio_url": {"url": f"asset://{assets[audio_asset_key]}"}, "role": "reference_audio"})
                 self._log_job_decisions(anchor, ref, prompt, content, duration)

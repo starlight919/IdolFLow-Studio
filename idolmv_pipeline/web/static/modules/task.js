@@ -2,7 +2,7 @@
 // ==========================================================================
 
 import store from './state.js';
-import { api, post, uploadFile, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
+import { api, post, uploadFile, copyAssetFile, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
 import { $, $$, toast, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
 
 // ── Task Folder Relative Path ───────────────────────────────────────────────
@@ -55,7 +55,6 @@ export async function checkTaskFolderEmpty() {
   const tip = $('#empty-folder-tip');
   const needDirTip = $('#need-dir-tip');
   const rel = taskFolderRelative();
-  updateUploadState();
   if (!rel) {
     // 未确定任务文件夹：提示先建立，而非「缺少素材」
     if (tip) tip.hidden = true;
@@ -84,30 +83,17 @@ export async function checkTaskFolderEmpty() {
 
     tip.hidden = false;
   } catch {
-    // 目录不存在或列取失败时，不打扰用户
-    tip.hidden = true;
-  }
-}
-
-// 上传素材前，若未确定任务文件夹，禁用上传并给出悬浮提示。
-export function updateUploadState() {
-  const hasDir = !!taskFolderRelative();
-  const uploadBtn = $('#upload-btn');
-  const uploadInput = $('#upload-file');
-  const uploadCategory = $('#upload-category');
-  const needDirHint = '请先选择任务文件夹（步骤 1），再上传素材';
-  if (uploadBtn) { uploadBtn.disabled = !hasDir; uploadBtn.title = hasDir ? '' : needDirHint; }
-  if (uploadInput) { uploadInput.disabled = !hasDir; uploadInput.title = hasDir ? '' : needDirHint; }
-  if (uploadCategory) { uploadCategory.disabled = !hasDir; uploadCategory.title = hasDir ? '' : needDirHint; }
-}
-
-// 空目录提示里的「去上传」：滚动到上传素材区并高亮
-export function scrollToUpload() {
-  const row = $('.upload-row');
-  if (row) {
-    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    row.classList.add('flash');
-    setTimeout(() => row.classList.remove('flash'), 1600);
+    // 目录不存在（如手输的新文件夹名）：按"目录为空"提示，
+    // 引导上传/现场生成，而不是静默隐藏让人以为素材已齐
+    $$('.empty-folder-path').forEach((el) => {
+      const sub = el.dataset.sub || '';
+      el.textContent = `data_root/${rel}/${sub}`.replace(/\/$/, '');
+    });
+    const imgLine = $('#empty-folder-img');
+    const avLine = $('#empty-folder-av');
+    if (imgLine) imgLine.style.display = '';
+    if (avLine) avLine.style.display = '';
+    tip.hidden = false;
   }
 }
 
@@ -220,32 +206,236 @@ export function removeVideoAsset(type, file) {
   renderVideoAssetPreviews();
 }
 
-// ── Asset Picker ────────────────────────────────────────────────────────────
+// ── Asset Picker（从文件夹选择 / 本机上传 统一入口）─────────────────────────
 
-export async function openAssetPicker(category) {
+export async function openAssetPicker(category, opts = {}) {
+  // anchor-references：Anchor 生成器的参考图选择（任务文件夹在 #anchor-id）；
+  // 显式设置 anchorPickerMode，修复"上次进 anchor 选择器、未确认关闭后，
+  // 再开主工作台选择器仍走 anchor 分支"的残留状态
+  store.anchorPickerMode = category === 'anchor-references';
   store.assetPickerCategory = category;
-  store.assetPickerRoot = taskFolderRelative();
-  if (!store.assetPickerRoot) {
-    toast('请先选择任务文件夹（步骤 1），再选择素材');
-    return;
+  if (store.anchorPickerMode) {
+    const dataDir = ($('#anchor-id')?.value || '').trim().replace(/\/+$/, '');
+    if (!dataDir) {
+      toast('请先填写任务文件夹（步骤 1），再添加参考图');
+      return;
+    }
+    store.assetPickerRoot = `${dataDir}/anchors/anchor-references`;
+    store.assetPickerTaskId = dataDir;
+    store.assetPickerPath = store.assetPickerRoot;
+    store.assetPickerSelected = new Set();
+    $('#asset-picker-title').textContent = '添加 Anchor 参考图';
+  } else {
+    const root = taskFolderRelative().replace(/\/+$/, '');
+    if (!root) {
+      toast('请先选择任务文件夹（步骤 1），再添加素材');
+      return;
+    }
+    store.assetPickerRoot = root;
+    store.assetPickerTaskId = root;
+    // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）。
+    // 若默认目录不存在，browseAssets 会自动逐级回退到任务根目录。
+    store.assetPickerPath = `${root}/${category === 'anchors' ? 'anchors' : 'references'}`;
+    // 已选中项：references 在音频 tab 下读 #audio-refs
+    const isAudioTab = category === 'references'
+      && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+    store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references')));
+    $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考音视频';
   }
-  const root = store.assetPickerRoot.replace(/\/$/, '');
-  // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）：
-  // - Anchor 图片：上传与「设为 Anchor」的图都统一在 anchors/ 根目录，默认直接进去；
-  // - 参考音视频：统一在 references/，不混图片、不混内部目录。
-  // 若默认目录不存在，browseAssets 会自动逐级回退到任务根目录。
-  store.assetPickerPath = `${root}/${category === 'anchors' ? 'anchors' : 'references'}`;
-  // 已选中项：references 在音频 tab 下读 #audio-refs
-  const isAudioTab = category === 'references'
-    && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
-  store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references')));
-  $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考音视频';
   $('#asset-picker-modal').hidden = false;
+  _resetPickerUpload();
+  store.assetPickerOutside = new Map();
+  const fileInput = $('#picker-upload-file');
+  if (fileInput) fileInput.accept = _pickerUploadAccept();
+  switchPickerTab(opts.tab === 'upload' ? 'upload' : 'browse');
+  // 无论初始停在哪个 tab 都预取列表，避免从上传 tab 切回时显示上一次的旧列表
   await browseAssets(store.assetPickerPath);
 }
 
 export function closeAssetPicker() {
   $('#asset-picker-modal').hidden = true;
+  // 使在途上传批次失效：关闭弹窗后剩余文件不再继续传，残留状态不影响下次打开
+  if (_pickerUpload.uploading) {
+    toast('已取消剩余文件的上传（已传完的文件保留在文件夹里）');
+  }
+  _resetPickerUpload();
+}
+
+// ── Picker 上传 tab ─────────────────────────────────────────────────────────
+
+const _pickerUpload = { session: 0, uploading: false, rows: [] };
+
+function _pickerUploadAccept() {
+  return store.assetPickerCategory === 'references'
+    ? '.mp4,.mov,.m4v,.webm,.avi,.mkv,.mp3,.wav,.m4a,.aac,.flac,.ogg'
+    : 'image/*';
+}
+
+// 上传落点与勾选值约定（与后端 handle_upload 一一对应，勿改动单边）：
+// - anchors:           X-Category=anchors           → data/<dir>/anchors/<name>，返回 anchors/<name>，
+//                      列表值相对 <dir>，与返回值一致，直接用
+// - references:        X-Category=references        → data/<dir>/references/<name>，同上直接用
+// - anchor-references: X-Category=anchor-references → data/<dir>/anchors/anchor-references/<name>，
+//                      返回 anchors/anchor-references/<name>；列表值相对 assetPickerRoot
+//                      （<dir>/anchors/anchor-references），需取纯文件名
+function _pickerUploadContext() {
+  const category = store.assetPickerCategory;
+  if (category === 'anchor-references') {
+    return {
+      taskId: store.assetPickerTaskId,
+      destRel: store.assetPickerRoot,
+      value: (serverPath) => String(serverPath).split('/').pop(),
+    };
+  }
+  const sub = category === 'anchors' ? 'anchors' : 'references';
+  return {
+    taskId: store.assetPickerTaskId,
+    destRel: `${store.assetPickerRoot}/${sub}`,
+    value: (serverPath) => serverPath,
+  };
+}
+
+function _resetPickerUpload() {
+  _pickerUpload.session += 1;
+  _pickerUpload.uploading = false;
+  _pickerUpload.rows = [];
+  const listEl = $('#picker-upload-list');
+  if (listEl) listEl.innerHTML = '';
+  const input = $('#picker-upload-file');
+  if (input) input.value = '';
+  _updatePickerConfirmBtn();
+}
+
+export function switchPickerTab(tab) {
+  const isUpload = tab === 'upload';
+  $$('.picker-tabs .ref-tab[data-picker-tab]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.pickerTab === tab);
+  });
+  const browse = $('#asset-picker-browse');
+  if (browse) browse.hidden = isUpload;
+  const upload = $('#asset-picker-upload');
+  if (upload) upload.hidden = !isUpload;
+  // 引导行按 tab 说明当前能做什么、另一个 tab 是干什么的，
+  // 让「本机上传」入口即使不点也看得懂
+  const label = store.assetPickerCategory === 'references' ? '音视频'
+    : store.assetPickerCategory === 'anchor-references' ? '参考图' : '图片';
+  const hintEl = $('#asset-picker-hint');
+  if (hintEl) {
+    hintEl.textContent = isUpload
+      ? `选本机文件直接上传到任务文件夹（自动勾选），再点「添加已选文件」加入`
+      : `勾选任务文件夹里已有的${label}；文件夹里没有？切「⬆ 本机上传」从电脑直接传`;
+  }
+  if (isUpload) _renderPickerUploadZone();
+}
+
+function _renderPickerUploadZone() {
+  const ctx = _pickerUploadContext();
+  const btn = $('#picker-upload-btn');
+  const dest = $('#picker-upload-dest');
+  if (!ctx.taskId) {
+    if (btn) btn.disabled = true;
+    if (dest) dest.textContent = '请先选择任务文件夹，再上传';
+    return;
+  }
+  if (btn) btn.disabled = _pickerUpload.uploading;
+  if (dest) dest.textContent = `将上传到 data/${ctx.destRel}/`;
+}
+
+function _renderPickerUploadRows() {
+  const listEl = $('#picker-upload-list');
+  if (!listEl) return;
+  listEl.innerHTML = _pickerUpload.rows.map((row) => {
+    const status = row.state === 'done'
+      ? '<span class="picker-upload-ok">✓ 已上传并选中</span>'
+      : row.state === 'failed'
+        ? `<span class="picker-upload-err">✗ ${escapeHtml(row.error || '上传失败')}</span>`
+        : row.state === 'uploading'
+          ? `<span class="picker-upload-pct">${row.percent}%</span>`
+          : '<span class="picker-upload-pct">等待中</span>';
+    return `<div class="picker-upload-row ${row.state}"><span class="picker-upload-name" title="${escapeAttr(row.file.name)}">${escapeHtml(row.file.name)}</span>${status}</div>`;
+  }).join('');
+}
+
+function _updatePickerConfirmBtn() {
+  const btn = $('#picker-confirm-btn');
+  if (!btn) return;
+  btn.disabled = _pickerUpload.uploading;
+  const n = store.assetPickerSelected ? store.assetPickerSelected.size : 0;
+  btn.textContent = n ? `添加已选文件 (${n})` : '添加已选文件';
+}
+
+export async function handlePickerUploadFiles(fileList) {
+  const files = [...(fileList || [])];
+  const input = $('#picker-upload-file');
+  if (input) input.value = '';
+  if (!files.length) return;
+  const ctx = _pickerUploadContext();
+  if (!ctx.taskId) {
+    toast('请先选择任务文件夹，再上传');
+    return;
+  }
+  if (_pickerUpload.uploading) {
+    toast('正在上传中，请稍候');
+    return;
+  }
+
+  // 同名冲突确认：后端对同名文件是覆盖写，这里在覆盖前让用户确认
+  const existing = new Set();
+  try {
+    const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(ctx.destRel)}`);
+    (data.items || []).forEach((item) => { if (!item.directory) existing.add(item.name); });
+  } catch { /* 目录不存在（首次上传），视为无冲突 */ }
+  const collisions = files.filter((f) => existing.has(f.name));
+  if (collisions.length) {
+    const names = collisions.map((f) => f.name).join('、');
+    const ok = await window.showDeleteConfirm({
+      title: '覆盖同名文件',
+      desc: `目标目录已有同名文件：${names}。\n继续上传将覆盖它们（任务里引用旧文件的地方会使用新内容）。`,
+      showFileOption: false,
+      confirmText: '覆盖上传',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+
+  const session = _pickerUpload.session;
+  _pickerUpload.uploading = true;
+  _pickerUpload.rows = files.map((file) => ({ file, state: 'waiting', percent: 0, error: '' }));
+  _renderPickerUploadRows();
+  _updatePickerConfirmBtn();
+  _renderPickerUploadZone();
+
+  let anySuccess = false;
+  for (const row of _pickerUpload.rows) {
+    // 弹窗已关闭/重新打开（session 变化）：中止剩余文件
+    if (session !== _pickerUpload.session) return;
+    row.state = 'uploading';
+    _renderPickerUploadRows();
+    try {
+      const result = await uploadFile(row.file, {
+        taskId: ctx.taskId,
+        category: store.assetPickerCategory,
+        onProgress: (p) => { row.percent = p; _renderPickerUploadRows(); },
+      });
+      row.state = 'done';
+      row.percent = 100;
+      // 上传成功即加入勾选：值按 context 约定转换，确认后落进对应字段
+      store.assetPickerSelected.add(ctx.value(result.file || row.file.name));
+      anySuccess = true;
+    } catch (e) {
+      row.state = 'failed';
+      row.error = e.message;
+    }
+    _renderPickerUploadRows();
+  }
+  _pickerUpload.uploading = false;
+  _updatePickerConfirmBtn();
+  _renderPickerUploadZone();
+  // 全部传完：切回文件夹视图并定位到目标目录，刚上传的文件已勾选，所见即所得
+  if (anySuccess && session === _pickerUpload.session && !$('#asset-picker-modal').hidden) {
+    switchPickerTab('browse');
+    await browseAssets(ctx.destRel);
+  }
 }
 
 export async function browseAssets(path) {
@@ -253,6 +443,10 @@ export async function browseAssets(path) {
     let data;
     // 逐级向上回退：默认子目录（anchors/、references/）不存在时，
     // 自动回退到父目录乃至任务根目录，让用户能看到直接放在根目录下的素材。
+    // 强制边界：最多回退到任务根目录（assetPickerRoot）为止——目录不存在时展示
+    // 空状态（含上传入口），绝不能爬到 data_root 根把别的任务文件夹列出来，
+    // 否则勾选的相对路径不属于当前任务，保存后会解析失败。
+    const stopAt = (store.assetPickerRoot || '').replace(/\/+$/, '');
     let cur = path;
     while (true) {
       try {
@@ -260,11 +454,12 @@ export async function browseAssets(path) {
         break;
       } catch (e) {
         const parent = String(cur).split('/').slice(0, -1).join('/');
-        if (parent && parent !== cur) {
-          cur = parent;
-        } else {
-          throw e;
+        if (cur === stopAt || (!parent || parent === cur)) {
+          // 任务根目录本身不存在（手输的新文件夹名等）：按空目录渲染
+          data = { path: cur, items: [] };
+          break;
         }
+        cur = parent;
       }
     }
     store.assetPickerPath = data.path === '.' ? '' : data.path;
@@ -273,6 +468,13 @@ export async function browseAssets(path) {
     const parent = store.assetPickerPath.split('/').slice(0, -1).join('/');
     const base = store.assetPickerRoot ? store.assetPickerRoot.replace(/\/$/, '') + '/' : '';
     const relative = (item) => (item.path.startsWith(base) ? item.path.slice(base.length) : item.path);
+    // 跨文件夹文件（不在当前任务目录下）：勾选值是 data_root 全路径，直接引用会
+    // 在运行时找不到文件。记录到映射表，确认时自动复制进当前任务目录（等价本机上传）。
+    const isOutside = (item) => !item.path.startsWith(base);
+    if (!store.assetPickerOutside) store.assetPickerOutside = new Map();
+    data.items.forEach((item) => {
+      if (!item.directory && isOutside(item)) store.assetPickerOutside.set(relative(item), item.path);
+    });
     const extRe = store.assetPickerCategory === 'references'
       ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i
       : /\.(png|jpe?g|webp)$/i;
@@ -339,15 +541,15 @@ export async function browseAssets(path) {
                 ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
                 : '')
             : allowed(item)
-              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span class="file-name">${escapeHtml(item.name)}</span>${store.assetPickerCategory === 'references' ? `<span class="file-kind ${isAudioName(item.name) ? 'kind-audio' : 'kind-video'}">${isAudioName(item.name) ? '🎵 音频' : '🎬 视频'}</span>` : ''}<input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
+              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span class="file-name">${escapeHtml(item.name)}</span>${store.assetPickerCategory === 'references' && !isOutside(item) ? `<span class="file-kind ${isAudioName(item.name) ? 'kind-audio' : 'kind-video'}">${isAudioName(item.name) ? '🎵 音频' : '🎬 视频'}</span>` : ''}${isOutside(item) ? '<span class="file-kind kind-copy" title="不在当前任务文件夹内，添加时会自动复制过来">⧉ 跨文件夹 · 添加时复制</span>' : ''}<input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
               : ''
         )
         .join('') +
-      // 空状态提示：当前目录（及其可见子目录）都没有可选文件
+      // 空状态提示：当前目录（及其可见子目录）都没有可选文件——给出可直接点击的上传入口
       (visibleItems.length === 0 && !hasVisibleDirs
         ? (store.assetPickerCategory === 'anchor-references'
-            ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<br>可以用「本机上传」从本机上传，或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<任务文件夹>/anchors/anchor-references')}</code></div>`
-            : `<div class="asset-empty-tip">📂 当前目录没有可选素材。</div>`)
+            ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<div class="asset-empty-actions"><button class="secondary small" onclick="switchPickerTab('upload')">⬆ 从本机上传</button></div>或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<任务文件夹>/anchors/anchor-references')}</code></div>`
+            : `<div class="asset-empty-tip">📂 当前目录没有可选${store.assetPickerCategory === 'references' ? '音视频' : '图片'}。<div class="asset-empty-actions"><button class="secondary small" onclick="switchPickerTab('upload')">⬆ 从本机上传</button></div>也可以把文件手动放到任务文件夹后重新打开。</div>`)
         : '');
   } catch (e) {
     toast(e.message);
@@ -360,6 +562,7 @@ export function toggleAsset(input) {
   } else {
     store.assetPickerSelected.delete(input.value);
   }
+  _updatePickerConfirmBtn();
 }
 
 // 把文件合并进隐藏数据字段（追加去重，不覆盖已有内容）。
@@ -380,7 +583,83 @@ function _mergeIntoField(selector, files, { fillBlank = false } = {}) {
   el.value = raw.join('\n');
 }
 
-export function confirmAssetSelection() {
+// 跨文件夹勾选的文件在确认时复制进当前任务目录（服务端复制，源文件不动），
+// 复制后的本地路径替换原勾选值——与「本机上传」完全同语义。
+// 复制期间复用上传中的按钮禁用；同名冲突先确认再覆盖（与上传 tab 一致）。
+async function _importOutsideSelection() {
+  const outside = store.assetPickerOutside;
+  if (!outside || outside.size === 0) return;
+  const selected = [...store.assetPickerSelected].filter((v) => outside.has(v));
+  if (!selected.length) return;
+  const ctx = _pickerUploadContext();
+
+  const existing = new Set();
+  try {
+    const data = await api(`/api/files?root=data_root&path=${encodeURIComponent(ctx.destRel)}`);
+    (data.items || []).forEach((item) => { if (!item.directory) existing.add(item.name); });
+  } catch { /* 目标目录不存在（新文件夹），无冲突 */ }
+  const conflictNames = selected
+    .map((v) => outside.get(v).split('/').pop())
+    .filter((name) => existing.has(name));
+  let overwrite = false;
+  if (conflictNames.length) {
+    overwrite = await window.showDeleteConfirm({
+      title: '复制并覆盖同名文件',
+      desc: `当前任务目录已有同名文件：${[...new Set(conflictNames)].join('、')}。\n跨文件夹选择的文件将复制并覆盖它们（源文件夹不受影响）。`,
+      showFileOption: false,
+      confirmText: '覆盖复制',
+      danger: true,
+    });
+  }
+
+  _pickerUpload.uploading = true;
+  _updatePickerConfirmBtn();
+  let copied = 0;
+  let reused = 0;
+  let skipped = 0;
+  for (const value of selected) {
+    const src = outside.get(value);
+    const name = src.split('/').pop();
+    if (conflictNames.includes(name) && !overwrite) {
+      store.assetPickerSelected.delete(value);
+      skipped += 1;
+      continue;
+    }
+    try {
+      const result = await copyAssetFile({ src, taskId: ctx.taskId, category: store.assetPickerCategory, overwrite });
+      const localValue = ctx.value(result.file || name);
+      store.assetPickerSelected.delete(value);
+      store.assetPickerSelected.add(localValue);
+      copied += 1;
+      reused += (result.migrated || []).length;
+    } catch (e) {
+      store.assetPickerSelected.delete(value);
+      toast(`复制 ${name} 失败: ${e.message}`);
+    }
+  }
+  _pickerUpload.uploading = false;
+  _updatePickerConfirmBtn();
+  if (copied) {
+    toast(`已复制 ${copied} 个跨文件夹文件到当前任务目录${reused ? `，其中 ${reused} 个可直接复用已上传的云端 asset（无需重传）` : ''}${skipped ? `（${skipped} 个同名已跳过）` : ''}`);
+  }
+}
+
+export async function confirmAssetSelection() {
+  if (_pickerUpload.uploading) {
+    toast('上传未完成，请稍候再添加');
+    return;
+  }
+  // 强制校验：一个都没勾时拦截，引导勾选或去上传，而不是无变化地关掉弹窗
+  if (!store.assetPickerSelected || store.assetPickerSelected.size === 0) {
+    toast('请先勾选文件；文件夹里没有就切「⬆ 本机上传」');
+    return;
+  }
+  // 跨文件夹勾选 → 先复制进当前任务目录，再走正常添加（全部失败/取消则终止）
+  await _importOutsideSelection();
+  if (!store.assetPickerSelected.size) {
+    toast('没有可添加的文件（跨文件夹复制失败或已取消）');
+    return;
+  }
   if (store.anchorPickerMode) {
     // Import from anchor module dynamically to avoid circular deps
     import('./anchor.js').then(({ renderAnchorReferences, syncAspectSourceDropdowns }) => {
@@ -402,6 +681,8 @@ export function confirmAssetSelection() {
       store.anchorPickerMode = false;
       renderAnchorReferences();
       syncAspectSourceDropdowns();
+      // 参考图已即时落盘，刷新"还没有参考图"提示
+      import('./anchor.js').then(({ checkAnchorRefDir }) => checkAnchorRefDir());
       closeAssetPicker();
     });
     return;
@@ -426,11 +707,14 @@ export function confirmAssetSelection() {
       _mergeIntoField('#audio-refs', audioFiles, { fillBlank: true });
     }
     renderVideoAssetPreviews();
+    // 新上传的文件已落盘，目录不再是"空"，同步刷新空目录提示
+    checkTaskFolderEmpty();
     closeAssetPicker();
     return;
   }
   _mergeIntoField(target, [...store.assetPickerSelected]);
   renderVideoAssetPreviews();
+  checkTaskFolderEmpty();
   closeAssetPicker();
 }
 
@@ -1382,74 +1666,6 @@ export async function confirmStart() {
     await loadRuns();
     openRunPoll();
   } catch (e) {
-    toast(e.message);
-  }
-}
-
-// ── Asset Upload ────────────────────────────────────────────────────────────
-
-// 按文件类型自动归类上传下拉框：音视频 → 参考音视频（references），图片 → Anchor 图片（anchors）。
-function _autoSetUploadCategory(file) {
-  const catEl = $('#upload-category');
-  if (!catEl) return;
-  const isAudio = isAudioName(file.name);
-  const isVideo = /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
-  catEl.value = (isAudio || isVideo) ? 'references' : 'anchors';
-}
-
-// 选完文件立即切换下拉框类型，让用户选完就看到归到哪一类，而不是等点「上传素材」才变。
-export function initUploadCategoryAutoSwitch() {
-  $('#upload-file')?.addEventListener('change', (e) => {
-    const file = e.target.files?.[0];
-    if (file) _autoSetUploadCategory(file);
-  });
-}
-
-export async function uploadAsset() {
-  const file = $('#upload-file').files[0];
-  const id = $('#task-dir').value.trim();
-  if (!file || !id) return toast('请先选择任务文件夹并选择文件');
-
-  _autoSetUploadCategory(file);
-  const category = $('#upload-category').value;
-  const statusEl = $('#upload-status');
-  if (statusEl) statusEl.textContent = '上传中…';
-  try {
-    // 共享上传实现（api.js），与 Anchor 生成器的「本机上传」同一套超时/进度/错误语义
-    const result = await uploadFile(file, {
-      taskId: id,
-      category,
-      onProgress: (p) => { if (statusEl) statusEl.textContent = `${p}%`; },
-    });
-    // 后端返回的实际相对路径（例如 anchors/<filename>），优先使用，避免前后端路径不一致
-    const uploadedFile = result.file || `${category}/${file.name}`;
-    // 参考音视频按「文件类型」自动切到对应 tab 并写入字段：
-    // 上传音频 → 自动切「🎵 音频」tab 写入音频字段；上传视频 → 自动切「📹 视频」tab 写入视频字段。
-    // 两个 tab 内容可共存（视频 + 独立音频对口型）。
-    let target;
-    if (category === 'anchors') {
-      target = '#anchors';
-    } else {
-      const isAudioFile = isAudioName(file.name);
-      if (isAudioFile) {
-        switchRefTab('audio');
-        target = '#audio-refs';
-      } else {
-        switchRefTab('video');
-        target = '#references';
-      }
-    }
-    _mergeIntoField(target, [uploadedFile], { fillBlank: target === '#audio-refs' });
-    if (statusEl) statusEl.textContent = '完成';
-    renderVideoAssetPreviews();
-    checkTaskFolderEmpty();
-    toast('上传完成');
-    // 清空文件选择框，便于连续上传；几秒后自动清空状态
-    const fileInput = $('#upload-file');
-    if (fileInput) fileInput.value = '';
-    setTimeout(() => { if (statusEl && statusEl.textContent === '完成') statusEl.textContent = ''; }, 3000);
-  } catch (e) {
-    if (statusEl) statusEl.textContent = '';
     toast(e.message);
   }
 }

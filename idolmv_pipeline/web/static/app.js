@@ -9,25 +9,26 @@ import { api, post, loadSettings } from './modules/api.js';
 import { $, $$, toast, escapeHtml } from './modules/utils.js';
 import {
   renderAnchorAspects, renderAnchorReferences, prepareAnchors, saveAnchorTask,
-  resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart, uploadAnchorReference,
+  resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart,
   loadAnchorTasks, editAnchorTask, loadAnchorRuns, openAnchorPoll,
   regenerateAnchorBatch, promoteAnchor,
   toggleAnchorTaskSort,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
-  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
+  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorDir,
+  runPromptOptimizer, applyOptimizerResult,
   toggleRefAspectBinding, updateAnchorNote, deleteAnchorTask, recoverAnchorTask,
   renderAnchorQualityPresets, renderAnchorNegativePresets,
   loadAnchorReview,
   // Review
 } from './modules/anchor.js';
 import {
-  taskFolderRelative, checkTaskFolderEmpty, updateUploadState, scrollToUpload, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
-  browseAssets, toggleAsset, confirmAssetSelection, openFolderPicker, closeFolderPicker,
+  taskFolderRelative, checkTaskFolderEmpty, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
+  browseAssets, toggleAsset, confirmAssetSelection, switchPickerTab, handlePickerUploadFiles, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
   closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
-  uploadAsset, initUploadCategoryAutoSwitch, loadRuns, openRunPoll,
+  loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
   removeVideoAsset,
@@ -358,24 +359,26 @@ Object.assign(window, {
   openHelp, closeHelp,
   // Task
   openAssetPicker, closeAssetPicker, browseAssets, toggleAsset, confirmAssetSelection,
+  switchPickerTab, handlePickerUploadFiles,
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
-  scrollToUpload, goGenerateAnchor, checkTaskFolderEmpty,
+  goGenerateAnchor, checkTaskFolderEmpty,
   saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
-  uploadAsset, initUploadCategoryAutoSwitch, loadRuns, openRunPoll,
+  loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,
   // Lightbox
   closeImageLightbox,
   // Anchor
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
-  requestAnchorStart, uploadAnchorReference, loadAnchorTasks, editAnchorTask,
+  requestAnchorStart, loadAnchorTasks, editAnchorTask,
   loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
   promoteAnchor, toggleAnchorTaskSort,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
-  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorUpload, scrollToAnchorDir,
+  onAspectSourceChange, checkAnchorRefDir, scrollToAnchorDir,
+  runPromptOptimizer, applyOptimizerResult,
   toggleRefAspectBinding, updateAnchorNote, deleteAnchorTask, recoverAnchorTask,
   renderAnchorQualityPresets, renderAnchorNegativePresets,
   loadAnchorReview,
@@ -575,10 +578,14 @@ async function init() {
   if (anchorForm) anchorForm.addEventListener('submit', (e) => saveAnchorTask(e));
   const openTsBtn = $('#open-lyrics-timestamps');
   if (openTsBtn) openTsBtn.addEventListener('click', openLyricsTimestampsEditor);
-  // 任务文件夹变化时检测目录内是否已有素材（含手动输入路径），并更新上传区状态
-  $('#task-dir')?.addEventListener('change', () => { updateUploadState(); checkTaskFolderEmpty(); });
-  initUploadCategoryAutoSwitch();
-  updateUploadState();
+  // 任务文件夹变化时检测目录内是否已有素材：
+  // change（选择器回填/失焦）立即检测；手动输入走 input + 防抖，边输边反馈
+  let _dirCheckTimer = null;
+  $('#task-dir')?.addEventListener('change', () => { clearTimeout(_dirCheckTimer); checkTaskFolderEmpty(); });
+  $('#task-dir')?.addEventListener('input', () => {
+    clearTimeout(_dirCheckTimer);
+    _dirCheckTimer = setTimeout(checkTaskFolderEmpty, 500);
+  });
   checkTaskFolderEmpty();
   checkAnchorRefDir();
   // 智能解析输入一旦改动，之前的解析结果即失效，禁用「应用解析结果」按钮

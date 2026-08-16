@@ -32,8 +32,8 @@ _resolve_port() {
 }
 
 # 检查服务是否运行
-if pgrep -f "run.py video web" > /dev/null; then
-  PID=$(pgrep -f "run.py video web")
+if LC_ALL=C pgrep -f "run.py video web" > /dev/null; then
+  PID=$(LC_ALL=C pgrep -f "run.py video web")
   WEB_PORT="$(_resolve_port "$PID")"
   
   echo "✅ 状态: 运行中"

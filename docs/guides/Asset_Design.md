@@ -1,6 +1,6 @@
 # Seedance 素材 Asset 缓存与复用设计
 
-> 版本：V1.4（2026-08-16）
+> 版本：V1.7（2026-08-17）
 > 实现文件：`idolmv_pipeline/video_tasks/planner.py`、`runner.py`、`factory.py`、`web/handlers.py`
 
 ---
@@ -56,11 +56,14 @@ Material（素材）──引用──> Source（源文件）
 
 ## 4. 素材类型与处理产物
 
-| Material | Source | Artifact（处理产物） | Remote Asset key |
+| Material | Source | Artifact（处理产物） | Remote Asset key（V1.6 起带任务前缀） |
 |----------|--------|---------------------|------------------|
-| Anchor 图 | `task_dir/anchor.file` | 无（直接上传源图） | `anchor_anchor-N` |
-| 参考音频 | `task_dir/(audio_file or file)` | `audio.mp3` / `audio_padded.mp3` | `reference-1:audio` |
-| 参考视频 | `task_dir/reference.file` | `segment_XX.mp4` | `reference_参考_00` |
+| Anchor 图 | `task_dir/anchor.file` | 无（直接上传源图） | `anchor_<任务>_anchor-N` |
+| 参考音频 | `task_dir/(audio_file or file)` | `audio.mp3` / `audio_padded.mp3` | `<任务>_reference-1:audio` |
+| 参考视频 | `task_dir/reference.file` | `segment_XX.mp4` | `reference_<任务>_reference-N_00` |
+
+> key 按任务隔离，避免多任务共文件夹时互顶缓存（见边界 2）；旧版无任务前缀的 key
+> （`anchor_anchor-N` / `reference_reference-N_00` / `reference-N:audio`）读取时虚拟映射、写入不走。
 
 ### 4.1 参考音频的三种输入场景（重要）
 
@@ -73,7 +76,7 @@ Material（素材）──引用──> Source（源文件）
 | **③ 视频 + 独立音频**（对口型） | 📹 视频 tab 选视频 + 🎵 音频 tab 选独立音频 | `true` | 视频文件 | **独立音频 `audio_file`**（不从视频提取） | 用独立音频 | 走 `segment_XX` | `video_url` + `audio_url`（独立音频） |
 
 > **关键设计：视频 + 独立音频对口型**（📹 与 🎵 两个 tab 可共存）。
-> 同时传视频与独立音频时，音频作为**独立对口型源**保存并生效（视频模仿动作、音频对口型），生成时用独立音频而非从视频提取。两个 tab 内容互不覆盖：「选择文件 / 上传」按**当前 tab** 归位（视频 tab → 视频字段、音频 tab → 音频字段），编辑回填时 `audio_file` 一并回填到音频字段。未传独立音频时才回退场景 ①（从视频提取）。
+> 同时传视频与独立音频时，音频作为**独立对口型源**保存并生效（视频模仿动作、音频对口型），生成时用独立音频而非从视频提取。两个 tab 内容互不覆盖：「添加素材」弹窗按**文件类型**归位（视频 → 视频字段、音频 → 音频字段），编辑回填时 `audio_file` 按行号对应回填到音频字段（空行占位保持配对）。未传独立音频时才回退场景 ①（从视频提取）。
 
 **源文件选择逻辑**：`source = task_dir / (reference.audio_file or reference.file)`。
 - 场景 ①：前端不设置 `audio_file` → `source = file`（视频）→ 从视频提取音频
@@ -108,6 +111,7 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
 - 均未变 → 签名不变 → 复用 ✅
 
 > 每个处理产物旁的 `.src.json` marker 记录该签名（`{signature, source, transform, processor}`）。
+> marker 与产物读取均为**新（任务级）/旧（文件夹级共享）双路径**：现存有效则复用，重建才写任务级新路径（见边界 2）。
 
 ---
 
@@ -179,7 +183,7 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
 | 编辑操作 | 是否触发重传 | 原因 |
 |----------|------------|------|
 | 修改 Prompt / 歌词 / 镜头策略 | ❌ 不触发 | 不影响素材内容 |
-| 调整 Anchor 顺序（同一批图） | ✅ 视情况 | Asset key 基于位置，顺序变会换 key（稳定 Material ID 为后续优化方向） |
+| 调整 Anchor 顺序（同一批图） | ❌ 不触发 | inspect 按内容指纹（size+mtime_ns）匹配别名条目，同图换位置键仍复用（`_anchor_alias_key` + `_adopt_anchor_aliases`） |
 | 更换某张 Anchor 图 | ✅ 触发 | 源图内容变化 |
 | 修改 `pad_mode` / `crop_filter` / `split` | ✅ 触发 | transform 变化 → 产物重建 → 重传 |
 | 修改 `seedance_duration` | ✅ 触发 | 影响产物补齐/切片 |
@@ -206,7 +210,7 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 
 ```json
 {
-  "key": "anchor_anchor-1", "asset_id": "asst_xxx",
+  "key": "anchor_街道风__冻结_anchor-1", "asset_id": "asst_xxx",
   "action": "REUSE_REMOTE", "reason": "CACHE_HIT",
   "source_state": "PRESENT", "artifact_state": "VALID", "asset_state": "AVAILABLE",
   "visibility_state": "IDENTIFIABLE",
@@ -223,15 +227,18 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 | # | 边界 | 说明 |
 |---|------|------|
 | 1 | **源文件删除** | 源缺失时若无法识别内容（无 Snapshot），判定 `NEED_MATERIAL_REBIND` 阻断并提示重选；已上传的云端资源仍有效，但需用户重新提供源文件才能继续 |
-| 2 | **Anchor Asset key 基于位置** | key 由 `anchor-N` 位置决定，调整 Anchor 顺序会使同一张图换 key 而重复上传；稳定 Material ID 为后续优化方向 |
+| 2 | **Asset key 已按任务隔离（V1.6）** | 多任务共文件夹时各任务的素材 key 带任务前缀（`anchor_<任务>_<key>` 等），互不顶缓存；anchor 另有内容指纹别名复用（同文件夹换位、跨文件夹迁移零重传）。**存量旧 key 只读回退**：读取时虚拟映射到新 key，写入走新 key，旧条目保留，已有缓存零失效。配套：runtime/work 产物目录同步按任务隔离（`work/<文件夹>/<任务>/`），旧共享目录产物与 marker 只读回退 |
 | 3 | **旧资产无 transform 的兼容** | 有 `__source` 无 `__transform` 时，若产物指纹一致则视为匹配复用；但**产物重建后（`__source` 与当前产物不一致）会视为"无有效资产"走重传**，不复用旧资产 |
 | 4 | **资产显示与复用分离（产物重建/换源防误判）** | **核心防误判**：「资产是否存在」（显示"已上传"）= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配），**不依赖 `artifact_valid`**（status 面板未 prepare 时仍能显示已上传）；「能否复用」（REUSE_REMOTE）还需 `artifact_valid`（产物 marker 签名匹配当前源）。产物重建或**残留旧切片 + 资产 __source 匹配但产物无 marker/不对应当前源**时，仍显示"已上传"但 action 走重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`），避免误用旧产物 |
-| 5 | **跨任务文件夹隔离** | 资产缓存 `seedance/assets.json` 按**任务文件夹（data_dir）** 独立存放，**跨文件夹不共享、不互相复用**。即使两个文件夹有相同文件名的素材（如同名视频），资产也不通用——避免跨任务串数据；若需跨文件夹复用需引入全局内容指纹去重（后续方向） |
+| 5 | **跨任务文件夹隔离（复制时迁移 anchor 条目）** | 资产缓存 `seedance/assets.json` 仍按**任务文件夹（data_dir）** 独立存放、不共享。唯一例外：素材弹窗跨文件夹勾选触发 `/api/files/copy` 复制文件时，会把源文件夹里「上传产物即这份文件」的条目（实际即 anchor，copy2 保留指纹）**迁移**到目标文件夹，配合边界 2 的别名复用实现零重传复用；segment/audio 条目的 `__source` 是 runtime 产物指纹，不会命中、不迁移。源文件夹不受影响 |
 | 6 | **云端资源持久有效** | Seedance Asset 为持久化云端对象，正常情况下不会失效；🗑 清缓存仅用于确实需要强制重新上传的场景 |
 | 7 | **不传参考音频则不规划音频资产** | `pass_reference_audio=false`（如 motion 模式 / 手动关闭）时，音频不进入提交内容，Planner 也不再为其生成决策或上传（避免无效上传与面板噪音） |
-| 8 | **清缓存按键精确匹配** | `clear_assets` 只删除指定主键及其 `__source` / `__transform` 边车键；不再按子串匹配，避免键名含相同子串的素材被连带清除 |
-| 9 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
-| 10 | **音频源标记按产物选择** | 判断音频产物是否有效时，源标记按「实际要上传的产物」选择（`audio_padded` 读 `audio_padded.src.json`，否则读 `audio.src.json`），避免中途临时切源（用某视频提取音频）污染 `audio.src.json` 后改回原音频被误判失效 |
+| 8 | **anchor 源图编辑必须重传** | anchor 的 transform 恒为 `{"kind":"anchor"}`，仅凭 transform 相等判定会把已编辑源图误判为可复用（云端是旧图）。inspect 在「记录指纹与当前源不一致」时置空 asset_transform 强制走重传（TRANSFORM_CHANGED），资产仍显示"已上传"但不复用 |
+| 9 | **清缓存按键精确匹配** | `clear_assets` 只删除指定主键及其 `__source` / `__transform` 边车键；不再按子串匹配，避免键名含相同子串的素材被连带清除 |
+| 10 | **资产台账（append-only）** | 每次上传成功向 `seedance/asset_ledger.jsonl` 追加一行（时间/任务/key/asset_id/源指纹/transform/产物路径），**永不删除、清缓存不清除**。assets.json 里的记录会被后续重传覆盖（同 key 换内容时理应如此），台账是完整历史：被覆盖的 asset_id 可按任务/key/指纹/transform 找回（手工恢复：按指纹+transform 定位行，把 asset_id 与 `__transform` 写回 assets.json 即可） |
+| 11 | **运行快照** | 每次 submit 把实际使用的 `asset_id + transform` 写入 `run.json` 的 `assets_used` 字段——即使 assets.json 之后被覆盖/清理，每次生成用的是什么资产仍有据可查 |
+| 12 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
+| 13 | **音频源标记按产物选择** | 判断音频产物是否有效时，源标记按「实际要上传的产物」选择（`audio_padded` 读 `audio_padded.src.json`，否则读 `audio.src.json`），避免中途临时切源（用某视频提取音频）污染 `audio.src.json` 后改回原音频被误判失效 |
 
 ---
 
@@ -245,3 +252,11 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 | `web/handlers.py` | Status API（`_task_assets`） |
 | `web/static/modules/task.js` | Asset 面板渲染 |
 | `web/static/app.css` | Asset 面板样式 |
+
+### 数据文件
+
+| 文件 | 内容 |
+|------|------|
+| `data/<文件夹>/seedance/assets.json` | 当前生效的 asset 记录（可被重传覆盖） |
+| `data/<文件夹>/seedance/asset_ledger.jsonl` | **append-only 台账**：每次上传一行，永不删除（找回被覆盖的 asset_id） |
+| `runtime/outputs/<文件夹>/<run_id>/run.json` | 运行快照 `assets_used`（该次生成实际使用的 asset_id + transform） |

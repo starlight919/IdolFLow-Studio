@@ -5,7 +5,7 @@
 // the inline anchor form inside the video-task workflow.
 
 import store from './state.js';
-import { api, post, uploadFile } from './api.js';
+import { api, post } from './api.js';
 import { $, $$, toast, escapeHtml, escapeAttr, delay, renderEmptyState, stageName } from './utils.js';
 
 // ── Extracted helpers ──────────────────────────────────────────────────────
@@ -17,8 +17,6 @@ function selectedAspectKeys() {
 }
 
 function anchorReferencePreview(ref) {
-  // Local preview (newly uploaded, not yet saved)
-  if (ref._preview) return ref._preview;
   const dataDir = $('#anchor-id').value.trim();
   const path = ref.file.startsWith('anchor-references/') && dataDir
     ? `${dataDir}/anchors/${ref.file}`
@@ -152,15 +150,6 @@ export function renderAnchorAspects() {
   syncAspectSourceDropdowns(savedSources);
 }
 
-export function scrollToAnchorUpload() {
-  const row = $('#anchor-upload-actions');
-  if (row) {
-    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    row.classList.add('flash');
-    setTimeout(() => row.classList.remove('flash'), 1600);
-  }
-}
-
 export function scrollToAnchorDir() {
   const input = $('#anchor-id');
   if (input) {
@@ -201,17 +190,12 @@ export async function checkAnchorRefDir() {
     if (generated) generated.style.display = 'none';
     tip.hidden = false;
     const pickBtn = $('#anchor-pick-references');
-    const uploadBtn = $('#anchor-upload-reference-btn');
-    const hint = '请先填写任务文件夹（步骤 1）';
-    if (pickBtn) { pickBtn.disabled = true; pickBtn.title = hint; }
-    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.title = hint; }
+    if (pickBtn) { pickBtn.disabled = true; pickBtn.title = '请先填写任务文件夹（步骤 1）'; }
     return;
   }
   if (needDir) needDir.style.display = 'none';
   const pickBtn2 = $('#anchor-pick-references');
-  const uploadBtn2 = $('#anchor-upload-reference-btn');
   if (pickBtn2) { pickBtn2.disabled = false; pickBtn2.title = ''; }
-  if (uploadBtn2) { uploadBtn2.disabled = false; uploadBtn2.title = ''; }
 
   // 已填任务文件夹 → 检查 anchors/anchor-references/ 是否有图片
   const rel = `${dataDir}/anchors/anchor-references`;
@@ -409,23 +393,8 @@ export async function saveAnchorTask(event) {
     toast('请先选择任务文件夹');
     return null;
   }
-  const pending = store.anchorReferences.filter((r) => r._blob);
-  if (pending.length) {
-    for (const ref of pending) {
-      try {
-        // 共享上传实现（api.js），与主工作台「上传素材」同一套超时/进度/错误语义
-        const uploaded = await uploadFile(ref._blob, { taskId, category: 'anchor-references', filename: ref.file });
-        // Upload returns path relative to data dir (e.g. "anchors/anchor-references/x.jpg").
-        // AnchorTaskStore expects path relative to the anchors/ subdir.
-        ref.file = uploaded.file.replace(/^anchors\//, '');
-        delete ref._blob;
-        delete ref._preview;
-      } catch (e) {
-        toast(`上传 ${ref.file} 失败: ${e.message}`);
-        return null;
-      }
-    }
-  }
+  // 参考图经由「添加参考图」弹窗即时上传到 <dir>/anchors/anchor-references/，
+  // 保存任务时引用已落盘的文件，不再有本地暂存（_blob）延迟上传
 
   // 编辑已有任务且改了任务文件夹（id）→ 让用户选择「新建」还是「更新」
   const editingId = store.currentAnchorTask?.id;
@@ -549,43 +518,8 @@ export async function requestAnchorStart() {
     toast(e.message);
   }
 }
-
-export function uploadAnchorReference() {
-  const file = $('#anchor-upload-file').files[0];
-  if (!file) return toast('请先选择一张图片');
-
-  // 与「从文件夹选择」一致：未填任务文件夹时不允许添加参考图
-  const dataDir = $('#anchor-id')?.value.trim();
-  if (!dataDir) {
-    toast('请先填写任务文件夹（步骤 1），再上传图片');
-    $('#anchor-upload-file').value = '';
-    return;
-  }
-
-  // Validate image type
-  if (!file.type.startsWith('image/')) return toast('仅支持图片文件');
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    store.anchorReferences.push({
-      id: `ref-${store.anchorReferences.length + 1}`,
-      file: file.name,
-      bindings: [],  // No auto-binding — user selects source per aspect in step 3
-      note: '',
-      remove_watermark: false,
-      // Store raw data for deferred upload at save time
-      _blob: file,
-      _preview: reader.result,
-    });
-    renderAnchorReferences();
-    syncAspectSourceDropdowns();
-    // 清空 file input，方便下次选择（同文件也能再次选中）
-    $('#anchor-upload-file').value = '';
-    toast(`已添加参考图: ${file.name} → 请到 step 3 为参考点指定来源`);
-  };
-  reader.onerror = () => toast('读取图片失败，请重试');
-  reader.readAsDataURL(file);
-}
+// 「本机上传参考图」已并入共享素材弹窗（pickAnchorReferences → openAssetPicker
+// 的「本机上传」tab，即时上传到 anchors/anchor-references/），原独立入口移除
 
 /**
  * Remove a reference image by index.
@@ -1039,23 +973,11 @@ export function openAnchorFolderPicker() {
 
 // ── Pick Anchor References ──────────────────────────────────────────────────
 
-export async function pickAnchorReferences() {
-  store.anchorPickerMode = true;
-  store.assetPickerCategory = 'anchor-references';
-  const dataDir = $('#anchor-id').value.trim();
-  if (!dataDir) {
-    toast('请先填写任务文件夹（步骤 1），再选择图片');
-    return;
-  }
-  // 参考图在 <dataDir>/anchors/anchor-references/，直接进入该子目录
-  // （anchors/ 根目录放的是最终任务 Anchor 图，不是生成参考图）
-  store.assetPickerRoot = dataDir ? `${dataDir}/anchors/anchor-references` : '';
-  store.assetPickerPath = store.assetPickerRoot;
-  store.assetPickerSelected = new Set();
-  $('#asset-picker-title').textContent = '选择 Anchor 参考图片';
-  $('#asset-picker-modal').hidden = false;
-  // browseAssets is defined in task module, called via window
-  if (window.browseAssets) await window.browseAssets(store.assetPickerPath);
+export async function pickAnchorReferences(tab) {
+  // 统一走 task.js 的共享素材弹窗：anchor-references context（弹窗内可从文件夹选择或本机上传）。
+  // openAssetPicker 是 task module 挂到 window 的函数，这里经 window 调用以避免静态循环依赖
+  if (window.openAssetPicker) await window.openAssetPicker('anchor-references', { tab: tab === 'upload' ? 'upload' : 'browse' });
+  else toast('素材弹窗尚未就绪，请稍后重试');
 }
 
 export async function openInlineAnchor() {

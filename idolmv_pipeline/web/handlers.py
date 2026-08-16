@@ -744,6 +744,8 @@ def _task_assets(handler, task_id: str) -> dict:
     # plan 不需要 client（仅 upload 需要），传 None 即可
     runner = VideoTaskRunner(adapter, client=None, progress=lambda **_: None)
     decisions = runner._plan_all(assets)
+    # anchor 别名复用（跨文件夹迁移/换位）：仅展示层面落账到名义 key，不写盘
+    runner._adopt_anchor_aliases(assets, persist=False)
     items = []
     for d in decisions:
         # asset_id 仅在「存在有效资产（可复用）」时返回；资产缺失/需重传时返回空，
@@ -823,6 +825,103 @@ def handle_upload(handler, path: str):
     # anchor-references so AnchorTaskStore can resolve them correctly.
     relative = destination.relative_to(root).as_posix()
     json_response(handler, 201, {"file": relative, "size": destination.stat().st_size})
+
+
+def _migrate_reusable_asset_entries(src: Path, src_rel: str, dest: Path, dst_assets_path: Path, config) -> list[str]:
+    """跨文件夹复制素材时，把源文件夹 assets.json 里「上传产物就是这份文件」的
+    条目迁移到目标文件夹（当前实际命中的是 anchor 条目：它没有独立产物层，
+    __source 指纹即源文件指纹；copy2 保留 size+mtime_ns，指纹校验天然成立）。
+    segment/audio 条目的 __source 是 runtime/work 产物指纹，不会命中源文件。
+    目标已有同名键不覆盖（可能绑定着目标文件夹自己的素材状态）；键名保持源任务
+    的位置键，本任务提交时由 runner 按内容指纹认领（_adopt_anchor_aliases）。
+    返回迁移的键列表（可为空）。"""
+    if "/" not in src_rel:
+        return []
+    src_dir = config.resolve_inside("data_root", src_rel.split("/")[0])
+    src_assets_path = src_dir / "seedance" / "assets.json"
+    if not src_assets_path.is_file():
+        return []
+    try:
+        src_assets = json.loads(src_assets_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    stat = src.stat()
+    matches = []
+    for key in src_assets:
+        if key.endswith("__source") or key.endswith("__transform"):
+            continue
+        fp = src_assets.get(f"{key}__source")
+        if not isinstance(fp, dict):
+            continue
+        # runtime/work 产物条目（segment/audio）的指纹属于产物文件，不属于被复制的
+        # 源素材——即使指纹碰巧相等也不迁移，复用必须可证明内容一致
+        if "/runtime/work/" in str(fp.get("path", "")).replace("\\", "/"):
+            continue
+        if fp.get("size") == stat.st_size and fp.get("mtime_ns") == stat.st_mtime_ns:
+            matches.append(key)
+    if not matches:
+        return []
+    dst_assets = {}
+    if dst_assets_path.is_file():
+        try:
+            dst_assets = json.loads(dst_assets_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            dst_assets = {}
+    migrated = []
+    for key in matches:
+        if key in dst_assets or not src_assets.get(key):
+            continue
+        dst_assets[key] = src_assets[key]
+        new_fp = dict(src_assets.get(f"{key}__source") or {})
+        new_fp["path"] = str(dest.resolve())
+        dst_assets[f"{key}__source"] = new_fp
+        transform = src_assets.get(f"{key}__transform")
+        if transform is not None:
+            dst_assets[f"{key}__transform"] = transform
+        migrated.append(key)
+    if migrated:
+        dst_assets_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = dst_assets_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(dst_assets, indent=2, ensure_ascii=False))
+        temporary.replace(dst_assets_path)
+    return migrated
+
+
+@_register("POST", "/api/files/copy")
+def handle_copy_file(handler, path: str):
+    """把 data_root 内已有文件复制到指定任务文件夹的类别目录。
+
+    素材弹窗允许浏览到其他任务文件夹，跨文件夹勾选的文件在确认时通过此接口
+    复制进当前任务目录（等价于本机上传），保证任务引用的文件始终在本文件夹内。
+    源文件保持不动（隔离不动别人），目标同名时默认 409，客户端确认后 overwrite 重试。
+    """
+    data = read_json(handler)
+    src_rel = str(data.get("src", "")).strip()
+    task_id = str(data.get("task_id", "")).strip()
+    category = data.get("category", "references")
+    overwrite = bool(data.get("overwrite"))
+    if not src_rel or not task_id or category not in {"anchors", "references", "anchor-references"}:
+        raise ValueError("src, task_id and valid category are required")
+    src = handler.app.config.resolve_inside("data_root", src_rel)
+    if not src.is_file():
+        raise FileNotFoundError(src_rel)
+    # 目标目录规则与 /api/uploads 完全一致
+    subdir = "anchors/anchor-references" if category == "anchor-references" else category
+    root = handler.app.config.resolve_inside("upload_root", task_id)
+    destination = (root / subdir / src.name).resolve()
+    if root not in destination.parents:
+        raise ValueError("invalid copy destination")
+    if destination.exists() and not overwrite:
+        json_response(handler, 409, {"error": f"目标目录已有同名文件: {src.name}", "file": src.name})
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, destination)
+    # 复制后迁移可复用的 asset 缓存条目（anchor：指纹即源文件，copy2 保留指纹）
+    migrated = _migrate_reusable_asset_entries(
+        src, src_rel, destination, root / "seedance" / "assets.json", handler.app.config
+    )
+    relative = destination.relative_to(root).as_posix()
+    json_response(handler, 201, {"file": relative, "size": destination.stat().st_size, "migrated": migrated})
 
 
 # ── Handlers: Run (Video) ────────────────────────────────────────────────────

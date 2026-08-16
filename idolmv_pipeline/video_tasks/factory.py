@@ -55,12 +55,19 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
             lyrics_timestamps=task.get("lyrics_timestamps"),
             timestamp_offset=_timestamp_offset(task, task_dir),
         )
-    # Use data_dir (not task name) for output/work dirs so multiple tasks
+    # Use data_dir (not task name) for output dirs so multiple tasks
     # sharing the same data dir co-locate their outputs.
+    # work 目录按任务隔离（<dir>/<task>/）：多任务共文件夹时各自的切片/音频产物与
+    # marker 不再互相覆盖（asset 复用证明依赖 marker 里的源指纹）；旧共享目录
+    # <dir>/ 通过 legacy_work_dir 传入 runner 作只读回退，存量产物继续有效
     dir_key = task.get("data_dir") or task["id"]
-    work_dir = _override(task, "work_dir", config.work_root / dir_key, config)
+    work_dir = _override(task, "work_dir", config.work_root / dir_key / task["id"], config)
     output_dir = _override(task, "output_dir", config.output_root / dir_key, config)
     publish_repo = Path(task.get("publish_repo", config.publish_repo)).expanduser().resolve()
+    # 发布文件名带文件夹命名空间：不同文件夹下的同名任务（如 街道风/冻结 与 冻结/冻结）
+    # 发布文件不再同名互覆盖；前缀已含文件夹名时保持原样
+    raw_prefix = str(task.get("filename_prefix") or task["id"])
+    publish_prefix = raw_prefix if raw_prefix.startswith(f"{dir_key}__") else f"{dir_key}__{raw_prefix}"
     return VideoTaskAdapter(
         name=task["id"],
         kind="dance" if mode == "motion" else "singing",
@@ -80,7 +87,7 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
         publish=PublishSpec(
             publish_repo,
             task.get("publish_subdirectory", config.publish_subdirectory),
-            task.get("filename_prefix", task["id"]),
+            publish_prefix,
         ),
         lyrics_file=task.get("lyrics_file"),
         source_root=task_dir.parent,
@@ -94,7 +101,7 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
         watermark=task.get("watermark", False),
         output_format=task.get("output_format", "mp4"),
         custom_prompt=task.get("custom_prompt") or None,
-        metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {})},
+        metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {}), "legacy_work_dir": str(config.work_root / dir_key)},
     )
 
 

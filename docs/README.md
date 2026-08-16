@@ -20,7 +20,7 @@ docs/
 │   ├── Prompt_Design.md             # Seedance Prompt 设计文档
 │   ├── VIDEO_LOCATIONS.md           # 视频输出位置与管理
 │   ├── ANCHOR_REFERENCE_MAPPING.md  # Anchor 参考图映射设计
-│   ├── Asset_Design.md              # Seedance 素材 Asset 缓存/复用设计
+│   ├── Asset_Design.md              # Seedance 素材 Asset 缓存/复用设计（key 按任务隔离 + 台账）
 │   └── Asset_Library_Roadmap.md     # 素材库演进路线图（保守版：不迁移路径，Phase 1 已实施）
 ```
 
@@ -48,7 +48,7 @@ docs/
 - **[Prompt_Design.md](guides/Prompt_Design.md)** — Seedance Prompt 七层语义架构设计文档
 - **[VIDEO_LOCATIONS.md](guides/VIDEO_LOCATIONS.md)** — 视频输出位置、目录结构、磁盘管理
 - **[ANCHOR_REFERENCE_MAPPING.md](guides/ANCHOR_REFERENCE_MAPPING.md)** — Anchor 参考图映射机制
-- **[Asset_Design.md](guides/Asset_Design.md)** — Seedance 素材 Asset 缓存/复用设计
+- **[Asset_Design.md](guides/Asset_Design.md)** — Seedance 素材 Asset 缓存/复用设计（任务隔离 key、跨文件夹复制复用、append-only 台账与运行快照）
 - **[Asset_Library_Roadmap.md](guides/Asset_Library_Roadmap.md)** — 素材库演进路线图（保守版：维持现有目录与身份模型，Phase 1 逻辑修复已实施）
 
 ### 运维 (`docs/`)

@@ -56,6 +56,10 @@ runtime/outputs/<任务文件夹>/<运行ID>/
 - 包含候选 ID、路径、Anchor 信息等
 - Web 界面用这个文件展示候选列表
 
+#### 4. run.json 的 `assets_used`
+- 本次提交实际使用的 asset_id + transform 快照
+- 即使 assets.json 之后被覆盖/清理，每次生成用的是什么资产都有据可查
+
 ## 如何查找视频
 
 ### 方法 1: Web 界面（推荐）
@@ -158,11 +162,12 @@ find . -name "final.mp4" -exec cp {} ~/Desktop/ruins_videos/ \;
 
 ### 中间文件
 ```
-runtime/work/<任务文件夹>/
+runtime/work/<任务文件夹>/<任务名>/     # 按任务隔离（V1.6 起）
+runtime/work/<任务文件夹>/              # 旧版共享目录（只读回退兼容，仍可清理）
 ```
-- 临时工作文件
-- 视频处理中间步骤
-- 可以安全删除（完成后）
+- 视频切片 / 提取音频 / 补齐时长等临时产物与 `.src.json` 签名 marker
+- 多任务共文件夹时互不覆盖；旧共享目录里的存量产物读取时自动回退使用
+- 可以安全删除（完成后；删除后按需重建，云端 asset 若有效仍复用不重传）
 
 ### 任务配置和素材
 ```
@@ -177,7 +182,8 @@ data/<任务文件夹>/
 │   ├── 唱歌版.json
 │   └── 跳舞版.json
 └── seedance/
-    └── assets.json          # 已上传资源 ID（同目录共享）
+    ├── assets.json          # 已上传资源 ID（key 按任务隔离：anchor_<任务>_* 等；旧格式只读回退）
+    └── asset_ledger.jsonl   # 资产台账（append-only）：每次上传一行，永不删除，可找回被覆盖的 asset_id
 ```
 
 > 素材目录约定：图片存放于 `anchors/`，音视频存放于 `references/`，任务目录根目录仅用于内部目录。

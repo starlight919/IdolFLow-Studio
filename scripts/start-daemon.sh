@@ -38,7 +38,7 @@ if (( ${#missing[@]} )); then
 fi
 
 # 检查是否已经在运行
-if pgrep -f "run.py video web" > /dev/null; then
+if LC_ALL=C pgrep -f "run.py video web" > /dev/null; then
   echo "⚠️  服务已经在运行中"
   echo ""
   echo "查看状态: bash scripts/status.sh"
@@ -84,7 +84,7 @@ echo $! > "$PID_FILE"
 sleep 2
 
 # 验证启动成功
-if pgrep -f "run.py video web" > /dev/null; then
+if LC_ALL=C pgrep -f "run.py video web" > /dev/null; then
   echo "✅ 服务已启动（后台运行）"
   echo ""
   echo "📍 访问地址: http://127.0.0.1:${WEB_PORT}/"

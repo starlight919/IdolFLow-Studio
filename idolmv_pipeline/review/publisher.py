@@ -8,7 +8,10 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-_SAFE = re.compile(r"[^A-Za-z0-9_-]+")
+# 保留 unicode 字符（中文任务名）与字母数字/下划线/连字符，仅替换空格等不安全字符。
+# 此前 [^A-Za-z0-9_-] 会把所有中文替换成下划线：不同中文任务名的发布文件
+# 全部塌缩成同一个文件名（如 "candidate_…"），在发布仓库里互相覆盖。
+_SAFE = re.compile(r"[^\w\-]+", re.UNICODE)
 
 
 def safe_name(value: str) -> str:

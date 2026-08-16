@@ -133,10 +133,20 @@ runtime/outputs/<任务文件夹>/<run_id>/ ← 生成结果（最终产物）
 
 > 只有当实际用起来真遇到麻烦时才做，每一项都**独立、可单独回滚**。
 
+### ✅ 已实施（2026-08-17）
+
+| # | 增强 | 实现方式 |
+|---|------|---------|
+| 1 | ~~Anchor 稳定 Material ID~~ | 以更轻的方式实现：不引入持久 ID，planner 按**内容指纹**匹配别名条目（`runner._anchor_alias_key` / `_adopt_anchor_aliases`）——同文件夹换位、跨文件夹复制迁移的 anchor 均零重传复用；源图编辑仍强制重传 |
+| 2 | ~~跨文件夹复用提示（只读）~~ | 直接做成自动复用：素材弹窗跨文件夹勾选时 `/api/files/copy` 复制文件并迁移匹配的 anchor asset 条目，提交时按内容指纹认领，零重传 |
+| 5 | **asset 记录与 work 产物按任务隔离**（实际遇到：多任务共文件夹互顶缓存导致乒乓重传） | asset key 带任务前缀 + work 目录 `<文件夹>/<任务>/`；**旧 key/旧目录只读回退**，存量缓存零失效（Asset_Design V1.6 边界 2） |
+| 6 | **资产持久化台账**（实际遇到：记录被覆盖后 asset_id 无法找回） | append-only `seedance/asset_ledger.jsonl` + `run.json.assets_used` 运行快照（Asset_Design V1.7 边界 10/11） |
+| 7 | **发布/下载文件名任务区分**（实际遇到：中文任务名塌缩成同名互覆盖） | `safe_name` unicode 化 + 发布前缀 `<文件夹>__<任务名>` 命名空间 |
+
+### ⏳ 待办（按需）
+
 | # | 增强 | 说明 |
 |---|------|------|
-| 1 | Anchor 稳定 Material ID | `anchor-N` 位置键导致列表重排即重传。可在 Task JSON 里为 anchor 持久化一个稳定 key（`anchor_asset_keys` 机制已存在，只差生成与回填），不影响 assets.json 结构 |
-| 2 | 跨文件夹复用提示（只读） | Status 面板 / Data Dir Browser 增加「该文件在其他文件夹已上传过」的提示（扫描各 `seedance/assets.json` 的 `__source` 指纹比对），只提示不自动复用，避免跨文件夹共享 assets.json 带来的清理/一致性问题 |
 | 3 | 音频扩展名识别增强 | `_resolve_transform("audio")` 与前端的音频正则补充 `.aiff/.opus/.wma` 等少见格式，避免按视频时长误判 |
 | 4 | `trim_duration` 死字段清理 | `ReferenceSpec.trim_duration` 没有任何地方用到，却被 factory 误当成 `duration` 填入；删除或改为显式 kwargs 传参 |
 

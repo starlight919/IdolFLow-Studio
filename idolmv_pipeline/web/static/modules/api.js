@@ -96,3 +96,12 @@ export function uploadFile(file, { taskId, category, filename, onProgress, timeo
     xhr.send(file);
   });
 }
+
+/**
+ * 把 data_root 内已有文件复制到任务文件夹的类别目录（服务端复制）。
+ * 素材弹窗跨文件夹勾选时在确认阶段调用，语义等价于本机上传。
+ * 目标已有同名文件时服务端返回 409，确认覆盖后带 overwrite 重试。
+ */
+export async function copyAssetFile({ src, taskId, category, overwrite = false }) {
+  return post('/api/files/copy', { src, task_id: taskId, category, overwrite });
+}
