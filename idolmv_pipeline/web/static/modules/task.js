@@ -20,6 +20,9 @@ const AV_EXTENSIONS = new Set([
   'mp4', 'mov', 'm4v', 'webm', 'avi', 'mkv',   // 视频
   'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg',   // 音频
 ]);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'aiff', 'opus', 'wma']);
+// 统一按扩展名判断音频，供 picker 展示、上传、选择共用，避免各处正则不一致
+const isAudioName = (name) => AUDIO_EXTENSIONS.has((name.split('.').pop() || '').toLowerCase());
 
 // 返回目录内是否已有图片 / 音视频。只下钻已知素材子目录，避免深挖 tasks/seedance 等无关目录。
 const ASSET_SUBDIR_RE = /^(anchors?|references?|audio|videos?|images?|assets?|anchor-references|generated)$/i;
@@ -86,13 +89,16 @@ export async function checkTaskFolderEmpty() {
   }
 }
 
-// 上传素材前，若未确定任务文件夹，禁用上传。
+// 上传素材前，若未确定任务文件夹，禁用上传并给出悬浮提示。
 export function updateUploadState() {
   const hasDir = !!taskFolderRelative();
   const uploadBtn = $('#upload-btn');
   const uploadFile = $('#upload-file');
-  if (uploadBtn) uploadBtn.disabled = !hasDir;
-  if (uploadFile) uploadFile.disabled = !hasDir;
+  const uploadCategory = $('#upload-category');
+  const needDirHint = '请先选择任务文件夹（步骤 1），再上传素材';
+  if (uploadBtn) { uploadBtn.disabled = !hasDir; uploadBtn.title = hasDir ? '' : needDirHint; }
+  if (uploadFile) { uploadFile.disabled = !hasDir; uploadFile.title = hasDir ? '' : needDirHint; }
+  if (uploadCategory) { uploadCategory.disabled = !hasDir; uploadCategory.title = hasDir ? '' : needDirHint; }
 }
 
 // 空目录提示里的「去上传」：滚动到上传素材区并高亮
@@ -219,6 +225,10 @@ export function removeVideoAsset(type, file) {
 export async function openAssetPicker(category) {
   store.assetPickerCategory = category;
   store.assetPickerRoot = taskFolderRelative();
+  if (!store.assetPickerRoot) {
+    toast('请先选择任务文件夹（步骤 1），再选择素材');
+    return;
+  }
   const root = store.assetPickerRoot.replace(/\/$/, '');
   // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）：
   // - Anchor 图片：上传与「设为 Anchor」的图都统一在 anchors/ 根目录，默认直接进去；
@@ -329,7 +339,7 @@ export async function browseAssets(path) {
                 ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
                 : '')
             : allowed(item)
-              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span>${escapeHtml(item.name)}</span><input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
+              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span class="file-name">${escapeHtml(item.name)}</span>${store.assetPickerCategory === 'references' ? `<span class="file-kind ${isAudioName(item.name) ? 'kind-audio' : 'kind-video'}">${isAudioName(item.name) ? '🎵 音频' : '🎬 视频'}</span>` : ''}<input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
               : ''
         )
         .join('') +
@@ -402,9 +412,8 @@ export function confirmAssetSelection() {
   // 音频文件 → 音频 tab / #audio-refs；视频文件 → 视频 tab / #references。避免在视频 tab 选了音频却落到视频字段。
   if (store.assetPickerCategory === 'references') {
     const selected = [...store.assetPickerSelected];
-    const isAudioRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
-    const audioFiles = selected.filter((f) => isAudioRe.test(f));
-    const videoFiles = selected.filter((f) => !isAudioRe.test(f));
+    const audioFiles = selected.filter((f) => isAudioName(f));
+    const videoFiles = selected.filter((f) => !isAudioName(f));
     if (videoFiles.length) {
       switchRefTab('video');
       _mergeIntoField('#references', videoFiles);
@@ -697,6 +706,15 @@ export function formTask() {
   };
 }
 
+// 对口型 / 口型+动作 必须填歌词：在「启动生成」前就拦截，避免跑到后端生成时才失败
+// （保存草稿不强制，与后端 store.validate strict=False 语义一致）
+function _validateLyricsForMode(data) {
+  const needLyrics = data.mode === 'lip_sync' || data.mode === 'dance_lip_sync';
+  if (needLyrics && !(data.lyrics || '').trim()) {
+    throw new Error('「' + (data.mode === 'lip_sync' ? '对口型' : '口型 + 动作') + '」模式必须填写歌词才能生成');
+  }
+}
+
 export function switchRefTab(tab) {
   const audioTA = $('#audio-refs');
   const padRow = $('.pad-mode-row');
@@ -930,19 +948,27 @@ function _renderTaskList() {
   });
   const html = sorted
     .map(
-      (t) => `<article class="task" data-id="${escapeHtml(t.id)}">
+      (t) => {
+        // 缺 Anchor 或参考音视频的任务不能直接运行（与表单「启动生成」的前置校验一致）
+        const missing = [];
+        if (!(t.anchors || []).length) missing.push('Anchor 图片');
+        if (!(t.references || []).length) missing.push('参考音视频');
+        const runDisabled = missing.length ? ' disabled' : '';
+        const runTitle = missing.length ? ` title="缺少${missing.join('、')}，请先编辑补全"` : '';
+        return `<article class="task" data-id="${escapeHtml(t.id)}">
         <div class="task-info">
           <h3>${escapeHtml(t.name || t.id)}</h3>
-          <div class="meta">📁 ${escapeHtml(t.data_dir || t.task_dir || '?')} · ${t.anchors.length} anchors</div>
+          <div class="meta">📁 ${escapeHtml(t.data_dir || t.task_dir || '?')} · ${(t.anchors || []).length} anchors</div>
           <div class="cfg-chips">${_taskConfigChips(t)}</div>
         </div>
         <div class="actions">
           <button class="secondary" data-action="task-assets">Assets</button>
           <button class="secondary" data-action="task-edit">编辑</button>
-          <button data-action="task-run">运行</button>
+          <button data-action="task-run"${runDisabled}${runTitle}>运行</button>
           <button class="danger" onclick="confirmDeleteTask('${escapeAttr(t.id)}')">删除</button>
         </div>
-      </article>`
+      </article>`;
+      }
     )
     .join('');
   list.innerHTML = html || renderEmptyState('📋', '还没有保存任务', '填写表单后点击"保存任务"即可添加');
@@ -1306,6 +1332,7 @@ export async function startCurrent() {
     // 提交前校验：anchor 与参考音视频必填
     if (!data.anchors.length) throw new Error('请先选择或生成 Anchor 图片');
     if (!data.references.length) throw new Error('请先上传参考音视频');
+    _validateLyricsForMode(data);
     const newId = `${data.data_dir}__${data.name}`;
     const editingId = store.currentTask?.id;
     if (editingId && editingId !== newId) {
@@ -1361,27 +1388,30 @@ export async function confirmStart() {
 
 // ── Asset Upload ────────────────────────────────────────────────────────────
 
+// 按文件类型自动归类上传下拉框：音视频 → 参考音视频（references），图片 → Anchor 图片（anchors）。
+function _autoSetUploadCategory(file) {
+  const catEl = $('#upload-category');
+  if (!catEl) return;
+  const isAudio = isAudioName(file.name);
+  const isVideo = /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
+  catEl.value = (isAudio || isVideo) ? 'references' : 'anchors';
+}
+
+// 选完文件立即切换下拉框类型，让用户选完就看到归到哪一类，而不是等点「上传素材」才变。
+export function initUploadCategoryAutoSwitch() {
+  $('#upload-file')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) _autoSetUploadCategory(file);
+  });
+}
+
 export async function uploadAsset() {
   const file = $('#upload-file').files[0];
   const id = $('#task-dir').value.trim();
   if (!file || !id) return toast('请先选择任务文件夹并选择文件');
 
+  _autoSetUploadCategory(file);
   let category = $('#upload-category').value;
-  // 按文件类型自动归类：音视频 → 参考音视频（references），图片 → Anchor 图片（anchors）。
-  // 避免下拉框默认停在「Anchor 图片」时，用户选音频/视频被误当 Anchor 上传，导致切不到对应 tab。
-  const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name);
-  const isVideo = /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
-  if (isAudio || isVideo) {
-    if (category !== 'references') {
-      category = 'references';
-      const catEl = $('#upload-category');
-      if (catEl) catEl.value = 'references';
-    }
-  } else if (category !== 'anchors') {
-    category = 'anchors';
-    const catEl = $('#upload-category');
-    if (catEl) catEl.value = 'anchors';
-  }
   const statusEl = $('#upload-status');
   if (statusEl) statusEl.textContent = '上传中…';
   const xhr = new XMLHttpRequest();
@@ -1407,7 +1437,7 @@ export async function uploadAsset() {
       if (category === 'anchors') {
         target = '#anchors';
       } else {
-        const isAudioFile = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name);
+        const isAudioFile = isAudioName(file.name);
         if (isAudioFile) {
           switchRefTab('audio');
           target = '#audio-refs';
@@ -1669,7 +1699,8 @@ export function closeLyricsTimestampsEditor() {
 function _refreshAddButton() {
   const btn = $('#add-timestamp-btn');
   if (!btn) return;
-  btn.disabled = _lyricsTsState.extracting || !_lyricsAudioEl || !_lyricsAudioEl.src;
+  const hasLyrics = (_lyricsTsState.lines || []).length > 0;
+  btn.disabled = _lyricsTsState.extracting || !_lyricsAudioEl || !_lyricsAudioEl.src || !hasLyrics;
 }
 
 export function renderLyricsTimestampLines() {

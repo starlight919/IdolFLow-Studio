@@ -165,6 +165,8 @@ signature = hash(源文件指纹 + 处理参数 transform + 处理器版本)
 > 不依赖 `artifact_valid`：status 面板未 prepare 时无法确认产物对应当前源，但"资产已上传"这一事实成立，故仍显示"已上传"+ 返回 `asset_id`。
 >
 > **能否复用**（`REUSE_REMOTE` vs 重传）：在"资产存在"基础上，还要求 **`artifact_valid`**（本地产物 marker 签名匹配当前源）——否则即使资产 `__source` 匹配旧产物，也仅显示"已上传"但 action 走重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`），避免误用残留旧产物。
+>
+> **音频产物有效性按「实际要上传的产物」选源标记**（`_inspect_audio`）：`artifact_valid` 判断"本地产物是否对应当前源"时，源标记文件按 desired 的 `kind` 选择——`audio_padded`（需补齐时长）读 `audio_padded.src.json`，否则读 `audio.src.json`。这样能避免 `audio.src.json` 被上一次用不同源（如临时切到某视频 `extract_audio`）污染后，改回原音频源却被误判产物失效、要求重新上传。
 
 ### 7.3 阻断
 
@@ -229,6 +231,7 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 | 7 | **不传参考音频则不规划音频资产** | `pass_reference_audio=false`（如 motion 模式 / 手动关闭）时，音频不进入提交内容，Planner 也不再为其生成决策或上传（避免无效上传与面板噪音） |
 | 8 | **清缓存按键精确匹配** | `clear_assets` 只删除指定主键及其 `__source` / `__transform` 边车键；不再按子串匹配，避免键名含相同子串的素材被连带清除 |
 | 9 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
+| 10 | **音频源标记按产物选择** | 判断音频产物是否有效时，源标记按「实际要上传的产物」选择（`audio_padded` 读 `audio_padded.src.json`，否则读 `audio.src.json`），避免中途临时切源（用某视频提取音频）污染 `audio.src.json` 后改回原音频被误判失效 |
 
 ---
 

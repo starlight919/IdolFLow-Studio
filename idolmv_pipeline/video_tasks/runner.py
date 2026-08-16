@@ -379,7 +379,11 @@ class VideoTaskRunner:
         cached_sig = _read_signature(audio_path.with_name("audio_padded.src.json")) if audio_path else None
         # 音频产物是否有效：源音频未变 + 产物存在（或用 padded marker 签名匹配）
         current_src = _fingerprint(source) if source_exists else None
-        audio_src_marker = (audio_path.with_name("audio.src.json") if audio_path else None)
+        # 源标记按「实际要上传的产物」选择：补齐时长时上传 audio_padded.mp3，否则上传 audio.mp3。
+        # 这样能避免 audio.src.json 被上一次用不同源（如临时切到某视频提取音频）污染后误判当前源失效。
+        want_padded = bool(desired and desired.get("kind") == "audio_padded")
+        src_marker_name = "audio_padded.src.json" if want_padded else "audio.src.json"
+        audio_src_marker = audio_path.with_name(src_marker_name) if audio_path else None
         cached_audio_src = None
         if audio_src_marker and audio_src_marker.exists():
             try:
@@ -387,7 +391,9 @@ class VideoTaskRunner:
                 cached_audio_src = data.get("source") if "source" in data else data
             except Exception:
                 cached_audio_src = None
-        artifact_valid = (source_exists and audio_path is not None and audio_path.exists()
+        # 产物存在性：按 want_padded 检查实际要上传的文件（audio_padded.mp3 或 audio.mp3）
+        artifact_file = audio_path.with_name("audio_padded.mp3") if (want_padded and audio_path) else audio_path
+        artifact_valid = (source_exists and artifact_file is not None and artifact_file.exists()
                           and cached_audio_src is not None and cached_audio_src == current_src)
         artifact_transform = None
         marker_path = audio_path.with_name("audio_padded.src.json") if audio_path else None

@@ -5,8 +5,8 @@
 ## [2026-08-16] - 路线图收敛为保守版 + 前后端逻辑漏洞修复
 
 ### 🗺️ 路线图收敛（`Asset_Library_Roadmap.md` v2）
-- **放弃近期实施全局素材库重构**：不引入 SQLite / `data/_asset_library/` / LocationResolver / `revision_id`，**不重设计 location、不迁移任何数据路径**——现有 `data/<文件夹>/` + `runtime/work` + `runtime/outputs` 布局与文档一致、运行良好，全局库收益不抵风险，降级为远期可选方向
-- 原全局重构方案（Phase 0–7）保留在 Git 历史中；新路线：修 bug（本次）→ 不动布局的小增强（按需）→ 只读素材总览页（按需）
+- **放弃近期实施全局素材库重构**：不引入 SQLite / `data/_asset_library/` / LocationResolver / `revision_id`，**不重设计 location、不迁移任何数据路径**——现有 `data/<文件夹>/` + `runtime/work` + `runtime/outputs` 布局与文档一致、运行良好，全局库划不来，改为远期可选方向
+- 新路线：修 bug（本次）→ 不动布局的小增强（按需）→ 只读素材总览页（按需）
 
 ### 🐛 后端修复
 - **`adapter_from_task` 解析 task_dir 用 task id 而非 data_dir**：`id != data_dir` 的任务会找错素材目录（`factory.py`）
@@ -20,21 +20,25 @@
 - **嵌套任务文件夹被截断**：`editTask` 用 `data_dir`（末级目录名）回填 `#task-dir`，嵌套路径保存后任务跑错位置；改为从 `task_dir` 剥 `data_root` 前缀还原完整相对路径
 - **更新任务先删后存可能丢数据**：改为先保存新任务成功再删旧任务，校验失败不再连带丢旧任务
 - **`resetForm` 残留音频 tab**：上次编辑纯音频任务后新建，表单停留音频 tab 导致误存纯音频任务；重置时切回视频 tab
-- **「启动」遇改名断头路**：`_pendingStart` 此前无人消费；保存方式弹窗成功后接续 `requestStart`
+- **「启动」遇改名断头路**：`_pendingStart` 此前没人接住；保存方式弹窗成功后接续 `requestStart`
 - **素材选择覆盖 vs 上传追加不一致**：`confirmAssetSelection` 统一为合并去重（音频优先填空占位行），不再覆盖丢已有项
 - **`checkMissingAssets` 吞错**：服务异常时显示「检测失败」横幅而非静默消失
 - **切换任务文件夹残留编辑态**：清空素材后同步清 `currentTask` / `originalPadMode`，重置按钮与保存弹窗行为一致
 
-### 📄 文档
-- `Asset_Design.md` 升至 V1.4：设计边界新增「不传参考音频则不规划音频资产」「清缓存按键精确匹配」
+### 🐛 音频复用误判修复（`runner.py`）
+- **`_inspect_audio` 源标记按产物选择**：判断音频产物是否有效时，源标记按「实际要上传的产物」选择——补齐时长（`audio_padded`）读 `audio_padded.src.json`，否则读 `audio.src.json`。修复中途临时切源（如用某视频提取音频）污染 `audio.src.json` 后改回原音频源，却被误判产物失效、要求重新上传的问题（冻结-街道风场景）
 
-## [2026-08-16] - 素材库重构路线图（规划，未实现）
+### ✨ 交互体验增强
+- **上传类型自动归类**：选完文件后「上传类型」下拉框按文件类型自动切换（音视频→参考音视频，图片→Anchor 图片），不再等点「上传素材」才变
+- **选择文件弹窗类型标签**：参考音视频列表每个文件带类型标签（🎵 音频 / 🎬 视频），一眼分辨归位，选完自动切 tab
+- **统一音频扩展名判断**：新增 `AUDIO_EXTENSIONS` + `isAudioName`，补 `aiff/opus/wma`、兼容大写扩展名，消除 upload/confirm/browse 三处正则不一致
+- **补齐 disabled 逻辑**：任务列表缺素材禁「运行」、Anchor 未选目录禁上传、`#upload-category` 随目录禁用、智能解析结果失效复位「应用解析结果」、添加时间点缺歌词禁用、`openAssetPicker` 未选目录不打开
+- **歌词必填校验**：`lip_sync` / `dance_lip_sync` 启动生成前校验歌词，未填立即提示、不进生成（保存草稿不强制）
+- **disabled 控件加 title 提示**：禁用时悬浮显示原因（「请先选择任务文件夹」等），操作指南同步补充
 
 ### 📄 文档
-- 新增 `docs/guides/Asset_Library_Roadmap.md`：素材库重构路线图（**待办，未开始实现**）。整合既有 `Asset_Design.md`、`Video_Task_Workflow.md`、`VIDEO_LOCATIONS.md` 等文档与代码现状，规划从「task_dir / file 决定素材身份」迁移到「全局 Library + Immutable Revision + Multi SourceLocation + Global Variant + Remote Asset + Task Binding」的完整路线
-- 路线图按 8 个阶段（Phase 0 Schema/LocationResolver → Phase 7 Source Cleanup/Restore）拆分，每阶段含交付物、验收点、回滚边界，并附核心测试矩阵与三个参考音频场景的显式 model 迁移策略
-- 同步 `Asset_Design.md`「资产显示 vs 复用分离」说明，与 `runner.py` 注释保持一致
-- `docs/README.md` 文档索引新增路线图入口，标注「待办，未实现」
+- `Asset_Design.md` 升至 V1.4：设计边界新增「不传参考音频则不规划音频资产」「清缓存按键精确匹配」「音频源标记按产物选择」
+- `Video_Task_Workflow.md` / `Singing_Video_Guide.md`：补充上传自动归类、类型标签、歌词必填、disabled 前置校验、任务列表运行禁用等交互说明
 
 ## [2026-08-15] - Asset 面板源文件变化标记 / 可编辑 Prompt / 参考音视频预览 / 排序优化
 

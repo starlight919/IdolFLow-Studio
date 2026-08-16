@@ -191,17 +191,27 @@ export async function checkAnchorRefDir() {
       renderAnchorReferences();
     }
     store._anchorDir = dataDir;
+    _resetOptimizerResult(); // 目录变化，之前基于旧目录参考图的解析结果失效
   }
 
-  // 未填任务文件夹 → 提示先填
+  // 未填任务文件夹 → 提示先填，并禁用添加参考图的入口
   if (!dataDir) {
     if (needDir) needDir.style.display = '';
     if (empty) empty.style.display = 'none';
     if (generated) generated.style.display = 'none';
     tip.hidden = false;
+    const pickBtn = $('#anchor-pick-references');
+    const uploadBtn = $('#anchor-upload-reference-btn');
+    const hint = '请先填写任务文件夹（步骤 1）';
+    if (pickBtn) { pickBtn.disabled = true; pickBtn.title = hint; }
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.title = hint; }
     return;
   }
   if (needDir) needDir.style.display = 'none';
+  const pickBtn2 = $('#anchor-pick-references');
+  const uploadBtn2 = $('#anchor-upload-reference-btn');
+  if (pickBtn2) { pickBtn2.disabled = false; pickBtn2.title = ''; }
+  if (uploadBtn2) { uploadBtn2.disabled = false; uploadBtn2.title = ''; }
 
   // 已填任务文件夹 → 检查 anchors/anchor-references/ 是否有图片
   const rel = `${dataDir}/anchors/anchor-references`;
@@ -559,6 +569,14 @@ export function uploadAnchorReference() {
   const file = $('#anchor-upload-file').files[0];
   if (!file) return toast('请先选择一张图片');
 
+  // 与「从文件夹选择」一致：未填任务文件夹时不允许添加参考图
+  const dataDir = $('#anchor-id')?.value.trim();
+  if (!dataDir) {
+    toast('请先填写任务文件夹（步骤 1），再上传图片');
+    $('#anchor-upload-file').value = '';
+    return;
+  }
+
   // Validate image type
   if (!file.type.startsWith('image/')) return toast('仅支持图片文件');
 
@@ -591,6 +609,7 @@ export function removeAnchorReference(index) {
   store.anchorReferences.splice(index, 1);
   syncAspectSourceDropdowns();
   renderAnchorReferences();
+  _resetOptimizerResult(); // 参考图变化，之前基于该参考图的解析结果失效
 }
 
 /**
@@ -985,6 +1004,7 @@ function renderAnchorReview() {
 }
 
 export async function regenerateAnchorBatch() {
+  if (!store.anchorManifest?.task) return toast('当前批次无有效任务配置');
   store.pendingAnchorTask = store.anchorManifest.task;
   store.pendingTask = null;
   $('#submit-password').value = '';
@@ -995,7 +1015,10 @@ export async function regenerateAnchorBatch() {
 function renderAnchorReviewToolbar() {
   const toolbar = $('#anchor-review-toolbar');
   if (!toolbar || !store.anchorManifest) return;
-  toolbar.innerHTML = `<button class="secondary" data-action="anchor-regenerate">按当前配置再生成一批</button>`;
+  const hasTask = !!store.anchorManifest.task;
+  const disabled = !hasTask ? ' disabled' : '';
+  const title = !hasTask ? ' title="当前批次无有效任务配置"' : '';
+  toolbar.innerHTML = `<button class="secondary" data-action="anchor-regenerate"${disabled}${title}>按当前配置再生成一批</button>`;
 }
 
 export async function promoteAnchor(id) {
@@ -1104,6 +1127,14 @@ export function autoFillAnchorFields(source) {
 
 let _lastOptimizerResult = null;
 window._lastOptimizerResult = null;
+
+// 解析结果一旦失效（输入被改动/目录切换/参考图清空），复位「应用解析结果」按钮
+function _resetOptimizerResult() {
+  _lastOptimizerResult = null;
+  window._lastOptimizerResult = null;
+  const applyBtn = $('#optimizer-apply-btn');
+  if (applyBtn) applyBtn.disabled = true;
+}
 
 // Category display metadata
 const CATEGORY_META = {

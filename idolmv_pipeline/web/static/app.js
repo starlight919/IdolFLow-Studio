@@ -27,7 +27,7 @@ import {
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
   closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
-  uploadAsset, loadRuns, openRunPoll,
+  uploadAsset, initUploadCategoryAutoSwitch, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
   removeVideoAsset,
@@ -364,7 +364,7 @@ Object.assign(window, {
   saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
-  uploadAsset, loadRuns, openRunPoll,
+  uploadAsset, initUploadCategoryAutoSwitch, loadRuns, openRunPoll,
   openLyricsTimestampsEditor, showLyricsShortcuts,
   // Lightbox
   closeImageLightbox,
@@ -577,9 +577,16 @@ async function init() {
   if (openTsBtn) openTsBtn.addEventListener('click', openLyricsTimestampsEditor);
   // 任务文件夹变化时检测目录内是否已有素材（含手动输入路径），并更新上传区状态
   $('#task-dir')?.addEventListener('change', () => { updateUploadState(); checkTaskFolderEmpty(); });
+  initUploadCategoryAutoSwitch();
   updateUploadState();
   checkTaskFolderEmpty();
   checkAnchorRefDir();
+  // 智能解析输入一旦改动，之前的解析结果即失效，禁用「应用解析结果」按钮
+  $('#optimizer-input')?.addEventListener('input', () => {
+    window._lastOptimizerResult = null;
+    const applyBtn = $('#optimizer-apply-btn');
+    if (applyBtn) applyBtn.disabled = true;
+  });
   $('#close-lyrics-timestamps')?.addEventListener('click', closeLyricsTimestampsEditor);
   // 遮罩点击关闭已统一由 setupModalAccessibility 处理
   $('#add-timestamp-btn')?.addEventListener('click', addTimestamp);

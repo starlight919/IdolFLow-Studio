@@ -444,7 +444,7 @@ html[data-theme="dark"] .folder-row-del{background:#5a2a26 !important;color:#f0b
 html[data-theme="dark"] .asset-empty-tip{background:#26262b}
 html[data-theme="dark"] .asset-empty-tip code{background:rgba(255,255,255,.08)}
 .missing-assets-banner{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;line-height:1.5}.asset-figure.missing{opacity:.5}.asset-figure.missing figcaption{color:#b91c1c;font-weight:600}
-.file-option .file-thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;margin-right:12px;flex-shrink:0;background:#ddd}.file-option>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-option .file-thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;margin-right:12px;flex-shrink:0;background:#ddd}.file-option>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-option .file-kind{flex:0 0 auto;margin-left:8px;font-size:11px;padding:2px 8px;border-radius:99px;white-space:nowrap}.file-option .kind-audio{background:#e6f2ff;color:#1a6fd4}.file-option .kind-video{background:#fff0e6;color:#c2521a}
 
 .asset-generated-hint{background:#f3e8ff !important;color:#5b21b6 !important;border:1px dashed #c4b5fd;width:100%;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:13px;cursor:pointer;text-align:left}
 .asset-generated-tip{background:#f3e8ff;color:#5b21b6;padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:13px;line-height:1.5}
