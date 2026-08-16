@@ -204,8 +204,13 @@ export function removeVideoAsset(type, file) {
   }
   const el = $(target);
   if (!el) return;
-  const current = el.value.split('\n').map((v) => v.trim()).filter(Boolean);
-  el.value = current.filter((v) => v !== file).join('\n');
+  const raw = el.value.split('\n').map((v) => v.trim());
+  // #audio-refs 按行号与 #references 配对：移除某行音频时用空行占位而不是删行，保持对齐
+  if (target === '#audio-refs') {
+    el.value = raw.map((v) => (v === file ? '' : v)).join('\n');
+  } else {
+    el.value = raw.filter((v) => v !== file).join('\n');
+  }
   renderVideoAssetPreviews();
 }
 
@@ -347,6 +352,24 @@ export function toggleAsset(input) {
   }
 }
 
+// 把文件合并进隐藏数据字段（追加去重，不覆盖已有内容）。
+// fillBlank：#audio-refs 按行号与 #references 配对，空行是「该视频无独立音频」的占位，
+// 新音频优先填入空占位行而不是追加到末尾，避免错位配对。
+function _mergeIntoField(selector, files, { fillBlank = false } = {}) {
+  const el = $(selector);
+  if (!el) return;
+  const raw = (el.value || '').split('\n').map((v) => v.trim());
+  for (const f of files) {
+    if (raw.includes(f)) continue;
+    if (fillBlank) {
+      const idx = raw.findIndex((v) => !v);
+      if (idx >= 0) { raw[idx] = f; continue; }
+    }
+    raw.push(f);
+  }
+  el.value = raw.join('\n');
+}
+
 export function confirmAssetSelection() {
   if (store.anchorPickerMode) {
     // Import from anchor module dynamically to avoid circular deps
@@ -384,25 +407,20 @@ export function confirmAssetSelection() {
     const videoFiles = selected.filter((f) => !isAudioRe.test(f));
     if (videoFiles.length) {
       switchRefTab('video');
-      const vEl = $('#references');
-      if (vEl) {
-        vEl.value = videoFiles.join('\n');
-        // 若同时选了音频，保留进音频字段（共存）
-        if (audioFiles.length) {
-          const aEl = $('#audio-refs');
-          if (aEl) aEl.value = audioFiles.join('\n');
-        }
+      _mergeIntoField('#references', videoFiles);
+      // 若同时选了音频，保留进音频字段（共存）
+      if (audioFiles.length) {
+        _mergeIntoField('#audio-refs', audioFiles, { fillBlank: true });
       }
     } else {
       switchRefTab('audio');
-      const aEl = $('#audio-refs');
-      if (aEl) aEl.value = audioFiles.join('\n');
+      _mergeIntoField('#audio-refs', audioFiles, { fillBlank: true });
     }
     renderVideoAssetPreviews();
     closeAssetPicker();
     return;
   }
-  $(target).value = [...store.assetPickerSelected].join('\n');
+  _mergeIntoField(target, [...store.assetPickerSelected]);
   renderVideoAssetPreviews();
   closeAssetPicker();
 }
@@ -560,6 +578,12 @@ export async function chooseFolder() {
     if ($('#constraints')) $('#constraints').value = '';
     if (promptTA) promptTA.value = '';
     store.customPromptDirty = false;
+    // 素材已清空，同步清掉编辑态，否则后续保存仍按「更新旧任务」弹二选一、
+    // 重置按钮也停留在「取消」
+    store.currentTask = null;
+    store.pendingLyricsTimestamps = null;
+    store.originalPadMode = null;
+    setTaskResetBtnLabel();
     _updatePromptModeBadge();
     renderVideoAssetPreviews();
   }
@@ -635,10 +659,17 @@ export function formTask() {
         }));
       }
       // 视频 tab：传视频 + 可选「独立音频」（音频 tab 传的，对口型源，优先于从视频提取）
+      // 独立音频按行号与视频一一配对：保留 #audio-refs 中的空行占位（editTask 回填时按
+      // reference 顺序生成，空行 = 该视频无独立音频），因此必须用原始行读取而不是 lines() 过滤
       const padEl = document.getElementById('pad-mode');
       const passAudioEl = document.getElementById('pass-reference-audio');
+      const audioRaw = ($('#audio-refs')?.value || '').split('\n').map((v) => v.trim());
+      const audioCount = audioRaw.filter(Boolean).length;
+      if (audioCount > videoRefs.length) {
+        throw new Error(`独立音频（${audioCount} 个）多于参考视频（${videoRefs.length} 个），请按「每行视频对应一行音频、无则留空」配对`);
+      }
       return videoRefs.map((file, i) => {
-        const ownAudio = audioRefs[i];
+        const ownAudio = audioRaw[i] || null;
         return {
           name: `reference-${i + 1}`,
           file,
@@ -781,16 +812,22 @@ export async function saveTask(event, mode = 'auto') {
 
 async function _doSave(data, editingId, mode) {
   const newId = `${data.data_dir}__${data.name}`;
-  // mode=update 且 id 变了（改名/改文件夹）：先删旧任务，再保存新任务
-  if (mode === 'update' && editingId && editingId !== newId) {
-    await api(`/api/tasks/${encodeURIComponent(editingId)}`, { method: 'DELETE' });
-  }
   // 检查同名任务是否存在（同名更新除外）
   const existing = store.tasks?.find(t => t.id === newId);
   if (existing && mode !== 'update') {
     throw new Error(`同名任务"${data.name}"已存在，请改名或选择更新已有任务`);
   }
-  return await post('/api/tasks', data);
+  const task = await post('/api/tasks', data);
+  // mode=update 且 id 变了（改名/改文件夹）：先保存新任务成功，再删旧任务。
+  // 若先删后存，保存校验失败会把旧任务一并丢掉（无回滚）
+  if (mode === 'update' && editingId && editingId !== newId) {
+    try {
+      await api(`/api/tasks/${encodeURIComponent(editingId)}`, { method: 'DELETE' });
+    } catch (e) {
+      toast(`旧任务「${editingId}」删除失败，请手动删除: ${e.message}`);
+    }
+  }
+  return task;
 }
 
 function showSaveModeDialog(data, editingId, reason = 'identity', extra = {}) {
@@ -827,6 +864,7 @@ function showSaveModeDialog(data, editingId, reason = 'identity', extra = {}) {
       syncPadMode();
       toast('已保存为新任务');
       await loadTasks();
+      _afterSaveMaybeStart();
     } catch (e) { toast(e.message); }
   };
   window._updateExisting = async () => {
@@ -836,8 +874,16 @@ function showSaveModeDialog(data, editingId, reason = 'identity', extra = {}) {
       syncPadMode();
       toast('任务已更新');
       await loadTasks();
+      _afterSaveMaybeStart();
     } catch (e) { toast(e.message); }
   };
+}
+
+// 保存方式弹窗保存成功后，若此前是「启动」触发的保存，直接接续启动流程
+function _afterSaveMaybeStart() {
+  if (!store._pendingStart) return;
+  store._pendingStart = false;
+  if (store.currentTask?.id) requestStart(store.currentTask.id);
 }
 
 const PAD_MODE_NAMES = { none: '原始时长', back: '后补齐', front: '前补齐' };
@@ -921,8 +967,17 @@ export function editTask(id) {
   store.currentTask = t;
   const nameEl = $('#task-name');
   if (nameEl) nameEl.value = t.name || '';
-  const dir = t.data_dir || t.task_dir || '';
-  $('#task-dir').value = dir.endsWith('/') ? dir : dir;
+  // 任务文件夹回填：优先用 task_dir（绝对路径）剥掉 data_root 前缀还原相对路径，
+  // 避免嵌套目录（如 a/b）被 data_dir（仅末级目录名）截断，保存后任务跑到错误位置
+  let dir = t.data_dir || '';
+  const dataRoot = store.workspaceSettings?.data_root || '';
+  if (t.task_dir && dataRoot) {
+    const norm = (p) => p.replace(/\/+$/, '');
+    if (norm(t.task_dir).startsWith(norm(dataRoot) + '/')) {
+      dir = norm(t.task_dir).slice(norm(dataRoot).length + 1);
+    }
+  }
+  $('#task-dir').value = dir;
   // 规范化路径：去掉可能存在的 data_dir 前缀（历史脏数据），保证相对 task_dir
   const stripDirPrefix = (file) => {
     const prefix = dir.replace(/\/+$/, '') + '/';
@@ -934,7 +989,9 @@ export function editTask(id) {
   // 视频任务若有独立音频（audio_file，对口型源），回填到音频字段，编辑时可见、可改
   const isAudioOnly = t.references?.length > 0 && t.references.every(r => r.pass_reference_video === false);
   const refFiles = t.references.map((x) => stripDirPrefix(x.file));
-  const audioFiles = t.references.map((x) => (x.audio_file ? stripDirPrefix(x.audio_file) : '')).filter(Boolean);
+  // 独立音频按 reference 顺序回填（无 audio_file 的位置留空行占位），
+  // 保持与 #references 行号的对应关系；formTask 按行号配对，否则编辑再保存会张冠李戴
+  const audioFiles = t.references.map((x) => (x.audio_file ? stripDirPrefix(x.audio_file) : ''));
   if (isAudioOnly) {
     $('#references').value = '';
     $('#audio-refs').value = refFiles.join('\n');
@@ -1013,7 +1070,9 @@ export async function checkMissingAssets(taskId) {
     // 标记预览区对应文件
     markMissingPreviews(missing.map((m) => m.file));
   } catch (e) {
-    banner.hidden = true;
+    // 检测失败（服务异常等）不静默吞掉：明确提示，避免用户误以为素材都在
+    banner.hidden = false;
+    banner.innerHTML = `⚠️ 素材状态检测失败（${escapeHtml(e.message)}），请确认服务正常后重试`;
   }
 }
 
@@ -1045,6 +1104,9 @@ export function resetForm() {
   _updatePromptModeBadge();
   $$('.mode').forEach((m, i) => m.classList.toggle('active', i === 0));
   updateMode();
+  // 重置到视频 tab 并恢复被音频 tab 隐藏的行（pad-mode / 传参考音频），
+  // 否则上次编辑纯音频任务后新建，表单仍停留在音频 tab，误存为纯音频任务
+  switchRefTab('video');
   renderVideoAssetPreviews();
   checkMissingAssets('');
   checkTaskFolderEmpty();
@@ -1247,10 +1309,10 @@ export async function startCurrent() {
     const newId = `${data.data_dir}__${data.name}`;
     const editingId = store.currentTask?.id;
     if (editingId && editingId !== newId) {
+      // 改名/改文件夹后启动：先走保存二选一弹窗，保存成功后由
+      // _afterSaveMaybeStart 接续 requestStart，无需用户再手动点启动
       store._pendingStart = true;
       await saveTask();
-      // saveTask 弹窗会通过 _saveAsNew/_updateExisting 保存后调用 loadTasks
-      // 但这里拿不到 task，简单处理：不继续启动，用户需手动点启动
       return;
     }
     const task = await saveTask(null, 'auto');
@@ -1356,7 +1418,7 @@ export async function uploadAsset() {
       }
       const el = $(target);
       if (el) {
-        el.value += `${el.value ? '\n' : ''}${uploadedFile}`;
+        _mergeIntoField(target, [uploadedFile], { fillBlank: target === '#audio-refs' });
       }
       if (statusEl) statusEl.textContent = '完成';
       renderVideoAssetPreviews();

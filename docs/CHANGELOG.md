@@ -2,6 +2,32 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-08-16] - 路线图收敛为保守版 + 前后端逻辑漏洞修复
+
+### 🗺️ 路线图收敛（`Asset_Library_Roadmap.md` v2）
+- **放弃近期实施全局素材库重构**：不引入 SQLite / `data/_asset_library/` / LocationResolver / `revision_id`，**不重设计 location、不迁移任何数据路径**——现有 `data/<文件夹>/` + `runtime/work` + `runtime/outputs` 布局与文档一致、运行良好，全局库收益不抵风险，降级为远期可选方向
+- 原全局重构方案（Phase 0–7）保留在 Git 历史中；新路线：修 bug（本次）→ 不动布局的小增强（按需）→ 只读素材总览页（按需）
+
+### 🐛 后端修复
+- **`adapter_from_task` 解析 task_dir 用 task id 而非 data_dir**：`id != data_dir` 的任务会找错素材目录（`factory.py`）
+- **`clear_assets` 子串匹配误伤**：`category in k` 会连带删除含相同子串的其他键（如 reference 名含 "audio"），改为精确匹配主键 + `__source/__transform` 边车键（`store.py`）
+- **`list()` 排序 stat 竞态**：glob 与排序之间任务文件被删除会让任务列表 500，`_safe_mtime` 兜底（`store.py`）
+- **`pass_reference_audio=false` 仍规划/上传音频**：motion 模式或手动关闭时不传音频却仍上传（浪费且面板出现无用行），`_plan_all` 跳过（`runner.py`）
+- **音频源缺失时残留过期指纹标记**：源不存在时清掉 `audio.src.json`，避免残留指纹误判缓存有效（`runner.py`）
+
+### 🐛 前端修复（`task.js`）
+- **独立音频按索引配对错位（最重要）**：`editTask` 回填 `audio_file` 时 `filter(Boolean)` 丢空位、`formTask` 按行号配对 → 编辑再保存会把音频挂到错误的视频；现按 reference 顺序生成含空行占位的 `#audio-refs`，`formTask` 用原始行配对，音频多于视频时报错而非静默丢弃；chips 移除音频也改为空行占位保持对齐
+- **嵌套任务文件夹被截断**：`editTask` 用 `data_dir`（末级目录名）回填 `#task-dir`，嵌套路径保存后任务跑错位置；改为从 `task_dir` 剥 `data_root` 前缀还原完整相对路径
+- **更新任务先删后存可能丢数据**：改为先保存新任务成功再删旧任务，校验失败不再连带丢旧任务
+- **`resetForm` 残留音频 tab**：上次编辑纯音频任务后新建，表单停留音频 tab 导致误存纯音频任务；重置时切回视频 tab
+- **「启动」遇改名断头路**：`_pendingStart` 此前无人消费；保存方式弹窗成功后接续 `requestStart`
+- **素材选择覆盖 vs 上传追加不一致**：`confirmAssetSelection` 统一为合并去重（音频优先填空占位行），不再覆盖丢已有项
+- **`checkMissingAssets` 吞错**：服务异常时显示「检测失败」横幅而非静默消失
+- **切换任务文件夹残留编辑态**：清空素材后同步清 `currentTask` / `originalPadMode`，重置按钮与保存弹窗行为一致
+
+### 📄 文档
+- `Asset_Design.md` 升至 V1.4：设计边界新增「不传参考音频则不规划音频资产」「清缓存按键精确匹配」
+
 ## [2026-08-16] - 素材库重构路线图（规划，未实现）
 
 ### 📄 文档

@@ -192,6 +192,9 @@ class VideoTaskRunner:
                     shutil.copyfile(source, audio)
                 if current_fp is not None:
                     fingerprint_marker.write_text(json.dumps(current_fp))
+                else:
+                    # 源缺失时清掉过期标记，避免残留指纹让后续 inspect 误判缓存仍有效
+                    fingerprint_marker.unlink(missing_ok=True)
                 audio_refreshed = True
             pad_mode = segments[0][4] if segments else "back"
             if segments and len(segments) == 1:
@@ -442,6 +445,10 @@ class VideoTaskRunner:
                 for index, _ in enumerate(self._segments(reference)):
                     decisions.append(plan_material(self._inspect_reference(reference, assets, index)))
         for reference in self.adapter.references:
+            # 不传参考音频（如 motion 模式 / 手动关闭）时音频不会进入提交内容，
+            # 无需规划/上传，避免 Status 面板出现无用行和浪费上传
+            if not reference.pass_reference_audio:
+                continue
             decisions.append(plan_material(self._inspect_audio(reference, assets)))
         return decisions
 

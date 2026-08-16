@@ -1,6 +1,6 @@
 # Seedance 素材 Asset 缓存与复用设计
 
-> 版本：V1.3（2026-08-15）
+> 版本：V1.4（2026-08-16）
 > 实现文件：`idolmv_pipeline/video_tasks/planner.py`、`runner.py`、`factory.py`、`web/handlers.py`
 
 ---
@@ -226,7 +226,9 @@ PLAN → 阻断检查 → (需要 build 时) PREPARE → 按 action UPLOAD → S
 | 4 | **资产显示与复用分离（产物重建/换源防误判）** | **核心防误判**：「资产是否存在」（显示"已上传"）= 资产存在 + 资产对应当前产物（`__transform` 匹配 或 `__source` 指纹匹配），**不依赖 `artifact_valid`**（status 面板未 prepare 时仍能显示已上传）；「能否复用」（REUSE_REMOTE）还需 `artifact_valid`（产物 marker 签名匹配当前源）。产物重建或**残留旧切片 + 资产 __source 匹配但产物无 marker/不对应当前源**时，仍显示"已上传"但 action 走重传（`UPLOAD_EXISTING_ARTIFACT` / `BUILD_AND_UPLOAD`），避免误用旧产物 |
 | 5 | **跨任务文件夹隔离** | 资产缓存 `seedance/assets.json` 按**任务文件夹（data_dir）** 独立存放，**跨文件夹不共享、不互相复用**。即使两个文件夹有相同文件名的素材（如同名视频），资产也不通用——避免跨任务串数据；若需跨文件夹复用需引入全局内容指纹去重（后续方向） |
 | 6 | **云端资源持久有效** | Seedance Asset 为持久化云端对象，正常情况下不会失效；🗑 清缓存仅用于确实需要强制重新上传的场景 |
-| 7 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
+| 7 | **不传参考音频则不规划音频资产** | `pass_reference_audio=false`（如 motion 模式 / 手动关闭）时，音频不进入提交内容，Planner 也不再为其生成决策或上传（避免无效上传与面板噪音） |
+| 8 | **清缓存按键精确匹配** | `clear_assets` 只删除指定主键及其 `__source` / `__transform` 边车键；不再按子串匹配，避免键名含相同子串的素材被连带清除 |
+| 9 | **Status API 容错** | 面板接口跳过素材文件与 prompt 校验（`skip_material_check`），即使源缺失或任务数据不完整也能展示素材状态 |
 
 ---
 

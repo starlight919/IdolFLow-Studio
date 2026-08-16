@@ -24,7 +24,9 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
     store = store or TaskStore(config)
     # skip_material_check：Status API 只展示素材状态，不校验素材文件存在，也跳过生成期（prompt）校验
     task = store.validate(task, require_anchors=require_anchors, check_materials=not skip_material_check, strict=not skip_material_check)
-    task_dir = store.task_dir(task["id"], task.get("task_dir"))
+    # validate 已算出 data_dir（可能来自 task_dir basename 或显式 data_dir，未必等于 task id），
+    # 解析 task_dir 必须用 data_dir，避免 id != data_dir 的任务找错素材目录
+    task_dir = store.task_dir(task["data_dir"], task.get("task_dir"))
     lyrics = str(task.get("lyrics", "")).strip()
     if task.get("lyrics_file"):
         lyrics = (task_dir / task["lyrics_file"]).read_text().strip()

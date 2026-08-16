@@ -28,6 +28,14 @@ def parse_composite_id(cid: str) -> tuple[str, str]:
     return cid, cid
 
 
+def _safe_mtime(path: Path) -> float:
+    # 列表排序期间的 stat 失败（文件恰被删除）不应让整个列表接口 500
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 class TaskStore:
     def __init__(self, config: VideoWorkspaceConfig):
         self.config = config
@@ -41,7 +49,7 @@ class TaskStore:
             return []
         result = []
         # New scheme: data/<dir>/tasks/<task_id>.json
-        for path in sorted(self.root.glob("*/tasks/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for path in sorted(self.root.glob("*/tasks/*.json"), key=lambda p: _safe_mtime(p), reverse=True):
             try:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.parent.name
@@ -57,7 +65,7 @@ class TaskStore:
             except (OSError, json.JSONDecodeError):
                 continue
         # Legacy migration: data/<dir>/task.json
-        for path in sorted(self.root.glob("*/task.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for path in sorted(self.root.glob("*/task.json"), key=lambda p: _safe_mtime(p), reverse=True):
             try:
                 task = json.loads(path.read_text())
                 data_dir = path.parent.name
@@ -140,7 +148,9 @@ class TaskStore:
         assets = json.loads(assets_path.read_text())
         removed = []
         for k in list(assets.keys()):
-            if category is None or category in k:
+            # 精确匹配主键（及其 __source/__transform 边车键）；此前的子串匹配会误伤
+            # 含相同子串的其他键（如 reference 命名含 "audio" 时清音频缓存会被连带清除）
+            if category is None or k == category or k.startswith(f"{category}__"):
                 del assets[k]
                 removed.append(k)
         if removed:

@@ -21,7 +21,7 @@ docs/
 │   ├── VIDEO_LOCATIONS.md           # 视频输出位置与管理
 │   ├── ANCHOR_REFERENCE_MAPPING.md  # Anchor 参考图映射设计
 │   ├── Asset_Design.md              # Seedance 素材 Asset 缓存/复用设计
-│   └── Asset_Library_Roadmap.md     # 素材库重构路线图（待办，未实现）
+│   └── Asset_Library_Roadmap.md     # 素材库演进路线图（保守版：不迁移路径，Phase 1 已实施）
 ```
 
 ## 🚀 快速入门
@@ -49,7 +49,7 @@ docs/
 - **[VIDEO_LOCATIONS.md](guides/VIDEO_LOCATIONS.md)** — 视频输出位置、目录结构、磁盘管理
 - **[ANCHOR_REFERENCE_MAPPING.md](guides/ANCHOR_REFERENCE_MAPPING.md)** — Anchor 参考图映射机制
 - **[Asset_Design.md](guides/Asset_Design.md)** — Seedance 素材 Asset 缓存/复用设计
-- **[Asset_Library_Roadmap.md](guides/Asset_Library_Roadmap.md)** — 素材库重构路线图（**待办，未开始实现**）
+- **[Asset_Library_Roadmap.md](guides/Asset_Library_Roadmap.md)** — 素材库演进路线图（保守版：维持现有目录与身份模型，Phase 1 逻辑修复已实施）
 
 ### 运维 (`docs/`)
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** — 部署、配置、公网访问
