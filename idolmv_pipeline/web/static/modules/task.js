@@ -1215,11 +1215,44 @@ export async function loadTasks() {
   _renderTaskList();
 }
 
+// ── 任务列表按文件夹分组 ─────────────────────────────────────────────────────
+// 素材/asset/运行都以文件夹为单位组织，列表按文件夹分组展示符合心智模型；
+// 不同文件夹下的同名任务（如 街道风/冻结 与 冻结/冻结）靠分组头自然区分。
+// 折叠状态记在 localStorage，跨会话保留。
+
+const COLLAPSED_KEY = 'idolflow-task-collapsed-folders';
+
+function _collapsedFolders() {
+  if (!store.collapsedFolders) {
+    try {
+      store.collapsedFolders = new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'));
+    } catch {
+      store.collapsedFolders = new Set();
+    }
+  }
+  return store.collapsedFolders;
+}
+
+export function toggleTaskGroup(dir) {
+  const set = _collapsedFolders();
+  if (set.has(dir)) set.delete(dir); else set.add(dir);
+  try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+  _renderTaskList();
+}
+
+function _fmtMtimeShort(mtime) {
+  if (!mtime) return '';
+  const d = new Date(mtime * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function _renderTaskList() {
   const list = $('#task-list');
   if (!list) return;
   _updateSortButtons('#task-sort-group', store.taskSort);
-  const sorted = [...store.tasks].sort((a, b) => {
+  const taskCmp = (a, b) => {
     const keyA = a.name || a.id;
     const keyB = b.name || b.id;
     switch (store.taskSort) {
@@ -1229,31 +1262,61 @@ function _renderTaskList() {
       case 'time-asc': return (a.mtime || 0) - (b.mtime || 0);
       default: return (b.mtime || 0) - (a.mtime || 0);
     }
+  };
+  // 按文件夹分组；组间排序：时间模式按组内最新编辑时间，名字模式按文件夹名
+  const groups = new Map();
+  for (const t of store.tasks) {
+    const dir = t.data_dir || '未分组';
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(t);
+  }
+  const groupNewest = (dir) => Math.max(...groups.get(dir).map((t) => t.mtime || 0));
+  const dirs = [...groups.keys()].sort((x, y) => {
+    if (store.taskSort === 'name-asc') return x.localeCompare(y, 'zh-Hans-CN');
+    if (store.taskSort === 'name-desc') return y.localeCompare(x, 'zh-Hans-CN');
+    if (store.taskSort === 'time-asc') return groupNewest(x) - groupNewest(y);
+    return groupNewest(y) - groupNewest(x);
   });
-  const html = sorted
-    .map(
-      (t) => {
-        // 缺 Anchor 或参考音视频的任务不能直接运行（与表单「启动生成」的前置校验一致）
-        const missing = [];
-        if (!(t.anchors || []).length) missing.push('Anchor 图片');
-        if (!(t.references || []).length) missing.push('参考音视频');
-        const runDisabled = missing.length ? ' disabled' : '';
-        const runTitle = missing.length ? ` title="缺少${missing.join('、')}，请先编辑补全"` : '';
-        return `<article class="task" data-id="${escapeHtml(t.id)}">
-        <div class="task-info">
-          <h3>${escapeHtml(t.name || t.id)}</h3>
-          <div class="meta">📁 ${escapeHtml(t.data_dir || t.task_dir || '?')} · ${(t.anchors || []).length} anchors</div>
-          <div class="cfg-chips">${_taskConfigChips(t)}</div>
-        </div>
-        <div class="actions">
-          <button class="secondary" data-action="task-assets">Assets</button>
-          <button class="secondary" data-action="task-edit">编辑</button>
-          <button data-action="task-run"${runDisabled}${runTitle}>运行</button>
-          <button class="danger" onclick="confirmDeleteTask('${escapeAttr(t.id)}')">删除</button>
-        </div>
-      </article>`;
-      }
-    )
+
+  const card = (t) => {
+    // 缺 Anchor 或参考音视频的任务不能直接运行（与表单「启动生成」的前置校验一致）
+    const missing = [];
+    if (!(t.anchors || []).length) missing.push('Anchor 图片');
+    if (!(t.references || []).length) missing.push('参考音视频');
+    const runDisabled = missing.length ? ' disabled' : '';
+    const runTitle = missing.length ? ` title="缺少${missing.join('、')}，请先编辑补全"` : '';
+    return `<article class="task" data-id="${escapeHtml(t.id)}">
+      <div class="task-info">
+        <h3>${escapeHtml(t.name || t.id)}</h3>
+        <div class="meta">${(t.anchors || []).length} anchors · ${escapeHtml(t.id)}</div>
+        <div class="cfg-chips">${_taskConfigChips(t)}</div>
+      </div>
+      <div class="actions">
+        <button class="secondary" data-action="task-assets">Assets</button>
+        <button class="secondary" data-action="task-edit">编辑</button>
+        <button data-action="task-run"${runDisabled}${runTitle}>运行</button>
+        <button class="danger" onclick="confirmDeleteTask('${escapeAttr(t.id)}')">删除</button>
+      </div>
+    </article>`;
+  };
+
+  const collapsed = _collapsedFolders();
+  const html = dirs
+    .map((dir) => {
+      const tasks = [...groups.get(dir)].sort(taskCmp);
+      const isCollapsed = collapsed.has(dir);
+      const newest = _fmtMtimeShort(groupNewest(dir));
+      const head = `<button type="button" class="task-group-head" onclick="toggleTaskGroup('${escapeAttr(dir)}')" title="${isCollapsed ? '展开' : '折叠'}该文件夹的任务">
+        <span class="group-caret${isCollapsed ? '' : ' open'}">▸</span>
+        <span class="group-name">📁 ${escapeHtml(dir)}</span>
+        <span class="group-count">${tasks.length} 个任务</span>
+        ${newest ? `<span class="group-meta">最近编辑 ${newest}</span>` : ''}
+      </button>`;
+      const body = isCollapsed
+        ? ''
+        : `<div class="task-group-body">${tasks.map(card).join('')}</div>`;
+      return `<section class="task-group" data-dir="${escapeAttr(dir)}">${head}${body}</section>`;
+    })
     .join('');
   list.innerHTML = html || renderEmptyState('📋', '还没有保存任务', '填写表单后点击"保存任务"即可添加');
 }
@@ -1689,9 +1752,11 @@ function runCard(r) {
   const isRunning = ['queued', 'running'].includes(r.status);
   const canReview = r.manifest || r.status === 'running';
   const resumeBtn = r.can_resume ? `<button class="run-resume" onclick="event.stopPropagation(); resumeRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
+  // 文件夹标识：不同文件夹下的同名任务（如 街道风/冻结 与 冻结/冻结）在运行列表也能区分
+  const dir = (r.task_id || '').split('__')[0] || '';
   return `<article class="run-card${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openRunReview('${escapeAttr(r.run_id)}')"` : ''}>
     <div class="run-main">
-      <h3>${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
+      <h3>${dir ? `<span class="run-dir">📁 ${escapeHtml(dir)}</span>` : ''}${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
       <div class="meta">${r.run_id} · ${escapeHtml(r.message || '')}</div>
       <div class="progress"><i style="width:${percent}%"></i></div>
     </div>
@@ -1721,7 +1786,11 @@ function refreshReviewOptions() {
   if (!select) return;
   const current = select.value;
   select.innerHTML = available
-    .map((r) => `<option value="${r.run_id}">${escapeHtml(r.task_name)} · ${r.run_id}${r.status === 'running' ? ' (生成中)' : ''}</option>`)
+    .map((r) => {
+      const dir = (r.task_id || '').split('__')[0] || '';
+      const label = dir ? `${dir} / ${r.task_name}` : r.task_name;
+      return `<option value="${r.run_id}">${escapeHtml(label)} · ${r.run_id}${r.status === 'running' ? ' (生成中)' : ''}</option>`;
+    })
     .join('');
   if (available.some((r) => r.run_id === current)) {
     select.value = current;

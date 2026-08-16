@@ -468,3 +468,36 @@ html[data-theme="dark"] .picker-upload-row{background:#26262a;color:#eee}
 .asset-empty-actions{margin:8px 0 6px}
 .asset-empty-actions button{padding:7px 14px;font-size:13px}
 .file-option .kind-copy{background:#eae7ff;color:#5546d6}
+
+/* ── 任务列表：按文件夹分组 ── */
+.task-group{margin-bottom:18px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface)}
+.task-group-head{display:flex;align-items:center;gap:10px;width:100%;background:transparent;color:var(--text);padding:11px 14px;font-size:13.5px;font-weight:600;text-align:left;border-radius:0}
+.task-group-head:hover{background:rgba(0,0,0,.03)}
+.task-group-head .group-caret{display:inline-block;transition:transform .15s;color:var(--muted);width:12px}
+.task-group-head .group-caret.open{transform:rotate(90deg)}
+.task-group-head .group-name{flex:0 0 auto}
+.task-group-head .group-count{flex:0 0 auto;font-weight:400;font-size:12px;color:var(--muted);background:rgba(127,127,127,.12);border-radius:99px;padding:2px 9px}
+.task-group-head .group-meta{margin-left:auto;font-weight:400;font-size:12px;color:var(--muted)}
+.task-group-body{display:grid;gap:10px;padding:0 12px 12px}
+.task-group-body .task{box-shadow:none;border:1px solid var(--line)}
+.run-dir{font-size:12px;font-weight:500;color:var(--muted);background:rgba(127,127,127,.12);border-radius:8px;padding:3px 8px;margin-right:8px;vertical-align:2px}
+html[data-theme="dark"] .task-group-head:hover{background:rgba(255,255,255,.04)}
+html[data-theme="dark"] .task-group-head{color:var(--text)}
+
+/* ── 修复：--primary 从未定义（排序激活态/模式徽标无背景） ── */
+:root{--primary:#1570d8}
+html[data-theme="dark"]{--primary:#4d9fff}
+
+/* ── dark 模式对比度补齐（浅色硬编码无暗色覆盖的选择器） ── */
+html[data-theme="dark"] .badge{background:#3a3a3e;color:#d1d1d6}
+html[data-theme="dark"] .missing-assets-banner{background:#3a1d1d;border-color:#6b2b2b;color:#fca5a5}
+html[data-theme="dark"] .asset-generated-hint{background:#2e2440 !important;color:#d6c7ff !important;border-color:#55467a}
+html[data-theme="dark"] .asset-generated-tip{background:#2e2440;color:#d6c7ff}
+html[data-theme="dark"] .asset-hint{background:#1c2a42;border-color:#2c4a72;color:#b7d0f5}
+html[data-theme="dark"] .folder-list label.file-option{background:#26262a;color:#eee}
+html[data-theme="dark"] .file-option .kind-video{background:#43290f;color:#ffb38a}
+html[data-theme="dark"] .progress{background:#2b2b30}
+html[data-theme="dark"] .cfg-chip{background:rgba(255,255,255,.05)}
+html[data-theme="dark"] .group-count,html[data-theme="dark"] .run-dir{color:#b8b8bd;background:rgba(255,255,255,.08)}
+html[data-theme="dark"] .file-option .file-thumb,html[data-theme="dark"] .reference-thumb{background:#2b2b30}
+html[data-theme="dark"] .anchor-review-card{border-color:#3a3a3e}

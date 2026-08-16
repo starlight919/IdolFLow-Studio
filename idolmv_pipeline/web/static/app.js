@@ -27,7 +27,7 @@ import {
   browseAssets, toggleAsset, confirmAssetSelection, switchPickerTab, handlePickerUploadFiles, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
-  closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
+  closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart, toggleTaskGroup,
   loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
@@ -359,7 +359,7 @@ Object.assign(window, {
   openHelp, closeHelp,
   // Task
   openAssetPicker, closeAssetPicker, browseAssets, toggleAsset, confirmAssetSelection,
-  switchPickerTab, handlePickerUploadFiles,
+  switchPickerTab, handlePickerUploadFiles, toggleTaskGroup,
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
   goGenerateAnchor, checkTaskFolderEmpty,
