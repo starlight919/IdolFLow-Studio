@@ -16,6 +16,9 @@ const store = {
   pendingLyricsTimestamps: null,
   taskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
   customPromptDirty: false,  // 预览 Prompt 是否被用户手动编辑过（true=自定义）
+  // 自由定制：参考图（customReferences）由素材弹窗维护；参考音视频（customRefs）由带标签的专属选择器维护
+  customReferences: [],  // [{ file }] —— 参考图，复用打开素材入口
+  customRefs: [],  // [{ file, kind:'video'|'audio', role }] —— 参考视频/音频，系统自动编号，用户只选语义标签
   originalPadMode: null,  // 编辑任务时回填的原始 pad_mode，用于检测用户改动（null=新建）
 
   // ========== Asset Picker ==========

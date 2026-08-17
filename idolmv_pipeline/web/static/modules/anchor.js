@@ -907,6 +907,11 @@ function renderAnchorReview() {
   content.innerHTML = store.anchorManifest.candidates
     .map((c) => {
       const used = store.anchorReviewState.published[c.id];
+      // 自由定制模式：候选图用作「参考图」加入当前任务，而非设为 Anchor 身份图
+      const isCustomRef = store.inlineAnchorReturn?.mode === 'custom';
+      const actionBtn = isCustomRef
+        ? `<button data-action="anchor-use-as-reference" data-id="${c.id}">用作参考图</button>`
+        : `<button data-action="anchor-promote" ${used ? 'class="selected"' : ''}>${used ? '取消 Anchor' : '设为 Anchor'}</button>`;
       return `<article class="anchor-review-card ${used ? 'published' : ''}" data-id="${c.id}">
         <img src="/api/anchor-runs/${run}/media/${encodeURIComponent(c.id)}">
         <div class="review-meta">
@@ -915,7 +920,7 @@ function renderAnchorReview() {
         </div>
         <div class="review-actions">
           <a href="/api/anchor-runs/${run}/download/${encodeURIComponent(c.id)}">下载</a>
-          <button data-action="anchor-promote" ${used ? 'class="selected"' : ''}>${used ? '取消 Anchor' : '设为 Anchor'}</button>
+          ${actionBtn}
         </div>
       </article>`;
     })
@@ -961,6 +966,25 @@ export async function promoteAnchor(id) {
   }
 }
 
+// 自由定制模式：把 Generator 生成的候选图「用作参考图」，落盘到 anchors/ 后回填到当前 custom 任务的 customReferences
+export async function useAnchorAsReference(id) {
+  const ret = store.inlineAnchorReturn;
+  if (!ret || ret.mode !== 'custom') return;
+  const run = $('#anchor-review-run').value;
+  try {
+    const result = await post(`/api/anchor-runs/${run}/promote`, { id });
+    const file = result.file;  // 相对数据目录根的路径，如 anchors/xxx.jpg
+    if (file) window.addCustomReference?.(file);
+    // 回填后回到视频任务视图，重建显隐 + 渲染参考图 chips
+    store.inlineAnchorReturn = null;
+    window.showView?.('tasks');
+    if (window.updateMode) window.updateMode();
+    toast('已加入参考图');
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
 // ── Folder Picker (reuses the folder modal from task.js) ───────────────────
 
 export function openAnchorFolderPicker() {
@@ -985,7 +1009,9 @@ export async function openInlineAnchor() {
   // 跳转后回到 Anchor 页面顶部（避免停留在上一个视图的滚动位置）
   scrollTo({ top: 0, behavior: 'auto' });
   // Pre-fill the anchor data directory from the current video task form
-  const taskDir = $('#task-dir')?.value.trim() || '';
+  // （custom 模式从 inlineAnchorReturn.dir 取，避免依赖任务表单字段）
+  const ret = store.inlineAnchorReturn;
+  const taskDir = (ret?.dir) || $('#task-dir')?.value.trim() || '';
   const taskName = $('#task-name')?.value.trim() || '';
   if (taskDir) {
     $('#anchor-id').value = taskDir;
@@ -1006,6 +1032,14 @@ export function setAnchorSource(source) {
   $$('[data-anchor-source]').forEach((b) => b.classList.toggle('active', b.dataset.anchorSource === source));
   $('#existing-anchor-source').hidden = source !== 'existing';
   $('#generate-anchor-source').hidden = source !== 'generate';
+}
+
+export function setCustomAnchorSource(source) {
+  $$('[data-custom-anchor-source]').forEach((b) => b.classList.toggle('active', b.dataset.customAnchorSource === source));
+  const existing = $('#existing-custom-anchor-source');
+  const generate = $('#generate-custom-anchor-source');
+  if (existing) existing.hidden = source !== 'existing';
+  if (generate) generate.hidden = source !== 'generate';
 }
 
 // Helper for auto-fill (used from app.js)

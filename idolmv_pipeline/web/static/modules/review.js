@@ -73,10 +73,16 @@ async function _fetchManifest(runId) {
 export function renderReview() {
   if (!store.reviewManifest) return;
 
+  // 按 anchor × reference 二维分组：同一 anchor 下不同 reference 各自成组，
+  // 避免多个参考视频的候选混在同一组内、因路径重叠而显示成重复
   const groups = new Map();
   store.reviewManifest.candidates.forEach((c) => {
-    if (!groups.has(c.anchor)) groups.set(c.anchor, { label: c.anchor_label, items: [] });
-    groups.get(c.anchor).items.push(c);
+    const key = `${c.anchor}|${c.reference}`;
+    if (!groups.has(key)) {
+      const refLabel = c.reference && c.reference !== c.anchor ? `${c.anchor_label} · ${c.reference}` : c.anchor_label;
+      groups.set(key, { label: refLabel, items: [] });
+    }
+    groups.get(key).items.push(c);
   });
 
   const toolbar = $('#review-toolbar');

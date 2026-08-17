@@ -11,9 +11,9 @@ import {
   renderAnchorAspects, renderAnchorReferences, prepareAnchors, saveAnchorTask,
   resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview, requestAnchorStart,
   loadAnchorTasks, editAnchorTask, loadAnchorRuns, openAnchorPoll,
-  regenerateAnchorBatch, promoteAnchor,
+  regenerateAnchorBatch, promoteAnchor, useAnchorAsReference,
   toggleAnchorTaskSort,
-  pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
+  pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, setCustomAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
   onAspectSourceChange, checkAnchorRefDir, scrollToAnchorDir,
   runPromptOptimizer, applyOptimizerResult,
@@ -23,15 +23,16 @@ import {
   // Review
 } from './modules/anchor.js';
 import {
-  taskFolderRelative, checkTaskFolderEmpty, goGenerateAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
+  taskFolderRelative, checkTaskFolderEmpty, goGenerateAnchor, goGenerateReference, addCustomReference, renderCustomRefs, setCustomRefRole, removeCustomRef, onCustomRoleChange, resetCustomRole, toggleCustomAudio, toggleAssetAudio, renderCustomAnchorRefs, removeCustomAnchor, renderVideoAssetPreviews, openAssetPicker, closeAssetPicker,
   browseAssets, toggleAsset, confirmAssetSelection, switchPickerTab, handlePickerUploadFiles, openFolderPicker, closeFolderPicker,
   browseFolder, chooseFolder, createFolder, confirmDeleteDataDir, formTask, updateMode, switchRefTab, switchPadMode, autoFillTaskFields,
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
+  onCustomAnchorRoleChange, setCustomAnchorRole, resetCustomAnchorRole,
   closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart, toggleTaskGroup,
   loadRuns, openRunPoll,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
-  removeVideoAsset,
+  removeVideoAsset, initCustomPromptTemplates, applyCustomPromptTemplate,
 } from './modules/task.js';
 import { prepareReview, loadReview, renderReview } from './modules/review.js';
 
@@ -297,6 +298,10 @@ function setupDelegatedHandlers() {
         promoteAnchor(id);
         return;
       }
+      if (target.closest('[data-action="anchor-use-as-reference"]')) {
+        useAnchorAsReference(id);
+        return;
+      }
     }
 
     // ── Review card (no vote buttons, only download) ──
@@ -362,7 +367,9 @@ Object.assign(window, {
   switchPickerTab, handlePickerUploadFiles, toggleTaskGroup,
   openFolderPicker, closeFolderPicker, browseFolder, chooseFolder, createFolder, confirmDeleteDataDir,
   renderVideoAssetPreviews, removeVideoAsset, autoFillTaskFields, markAsManuallyEdited,
-  goGenerateAnchor, checkTaskFolderEmpty,
+  initCustomPromptTemplates, applyCustomPromptTemplate,
+  goGenerateAnchor, goGenerateReference, renderCustomRefs, setCustomRefRole, onCustomRoleChange, resetCustomRole, toggleCustomAudio, toggleAssetAudio, removeCustomRef, renderCustomAnchorRefs, removeCustomAnchor, checkTaskFolderEmpty,
+  onCustomAnchorRoleChange, setCustomAnchorRole, resetCustomAnchorRole,
   saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
@@ -374,8 +381,8 @@ Object.assign(window, {
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
   requestAnchorStart, loadAnchorTasks, editAnchorTask,
   loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
-  promoteAnchor, toggleAnchorTaskSort,
-  pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, autoFillAnchorFields,
+  promoteAnchor, useAnchorAsReference, toggleAnchorTaskSort,
+  pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, setCustomAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,
   onAspectSourceChange, checkAnchorRefDir, scrollToAnchorDir,
   runPromptOptimizer, applyOptimizerResult,
@@ -532,11 +539,15 @@ function openImageLightbox(src, caption = '') {
   _showLightbox(caption);
 }
 
-// 打开音频/视频预览：type = 'audio' | 'video'，file 为相对 data_root 路径
+// 打开音频/视频预览：type = 'audio' | 'video'，file 为相对任务文件夹路径
 function openMediaLightbox(type, file, caption = '') {
   const mediaEl = $('#lightbox-media');
   if (!mediaEl || !file) return;
-  const url = _mediaPreviewUrl(file);
+  // file 是相对任务文件夹（task_dir）的路径，需补上前缀，
+  // 与缩略图 previewPath 的拼法一致，否则后端按 data_root 直接解析会 404。
+  const root = (typeof taskFolderRelative === 'function' ? taskFolderRelative() : '').replace(/\/$/, '');
+  const fullPath = root ? `${root}/${file}` : file;
+  const url = _mediaPreviewUrl(fullPath);
   const controls = type === 'video' ? 'controls' : 'controls autoplay';
   const tag = type === 'video' ? 'video' : 'audio';
   mediaEl.innerHTML = `<${tag} class="lightbox-${type}" src="${url}" ${controls} preload="metadata"></${tag}>`;
@@ -569,6 +580,7 @@ async function init() {
   setupDelegatedHandlers();
   setupModalAccessibility();
   setupImageLightbox();
+  initCustomPromptTemplates();
   updateMode();
   store.workspaceSettings = await loadSettings();
   // 绑定表单提交（type=submit 按钮需要 form submit 事件才能调用保存逻辑）

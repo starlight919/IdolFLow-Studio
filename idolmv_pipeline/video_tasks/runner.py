@@ -104,6 +104,14 @@ class VideoTaskRunner:
 
     def validate(self) -> list[str]:
         errors = []
+        if self.adapter.mode == "custom":
+            # 自由定制：只需 prompt（含可选参考图），不走锚点/引用/歌词流程
+            if not self.adapter.prompts or not str(self.adapter.prompts[0].first_prompt).strip():
+                errors.append("custom mode requires a prompt")
+            for anchor in self.adapter.anchors:
+                if not (self.adapter.task_dir / anchor.file).is_file():
+                    errors.append(f"missing anchor: {anchor.file}")
+            return errors
         if not self.adapter.anchors:
             errors.append("anchors must not be empty")
         if not self.adapter.references:
@@ -223,6 +231,7 @@ class VideoTaskRunner:
             cached_fp = self._read_json_any(reference, "audio.src.json")
             audio_refreshed = False
             if not audio_cur.exists() or cached_fp != current_fp:
+                audio.parent.mkdir(parents=True, exist_ok=True)
                 if reference.pass_reference_video:
                     # 视频模式：从视频提取音频
                     extract_audio(source, audio)
@@ -249,6 +258,7 @@ class VideoTaskRunner:
                     padded_marker = padded.with_name("audio_padded.src.json")
                     cached_padded_sig = self._read_signature_any(reference, "audio_padded.src.json")
                     if not padded_cur.exists() or audio_refreshed or cached_padded_sig != padded_signature:
+                        padded.parent.mkdir(parents=True, exist_ok=True)
                         pad_audio_to(audio_cur, padded, seedance_duration, pad_mode=pad_mode)
                         _write_marker(padded_marker, padded_signature, current_fp, padded_transform)
                         padded_cur = padded
@@ -804,6 +814,10 @@ class VideoTaskRunner:
         })
         count = candidates or self.adapter.candidate_policy.count
         existing = {job["id"] for job in state.jobs()}
+
+        if self.adapter.mode == "custom":
+            return self._submit_custom(state, assets, count, existing)
+
         total = len(self.adapter.anchors) * len(self.adapter.references) * count
         self._progress("submitting", f"准备提交 {total} 个候选", completed=len(existing), total=total)
 
@@ -854,19 +868,95 @@ class VideoTaskRunner:
         state.update(status="submitted")
         return state
 
+    def _submit_custom(self, state: RunState, assets: dict, count: int, existing: set[str]) -> RunState:
+        """自由定制（custom）提交路径：高度自由定制，复用 Prompt + 可选参考图/参考视频/参考音频。
+
+        - 无参考图/参考视频/音频：content 仅 text 项（文生视频）。
+        - 有参考图：content 追加 reference_image（图生视频）。
+        - 有参考视频/音频：作为「参考形式」整段传入（reference_video / reference_audio role），
+          不做 seg 切片、不做 mux 回灌——这是与锚点流程（对口型/动作）的主要区别。
+        duration 由任务配置（metadata.custom_duration）决定，默认 5s，夹在 4~30s。
+        """
+        prompt = self.adapter.prompts[0]
+        duration = int(self.adapter.metadata.get("custom_duration") or 5)
+        duration = max(4, min(duration, 30))
+        total = count
+        self._progress("submitting", f"准备提交 {total} 个候选", completed=len(existing), total=total)
+
+        content = [{"type": "text", "text": prompt.first_prompt}]
+        ref_label = "prompt"
+        if self.adapter.anchors:
+            anchor = self.adapter.anchors[0]
+            content.append({"type": "image_url", "image_url": {"url": f"asset://{assets[self._anchor_asset_key(anchor)]}"}, "role": "reference_image"})
+            ref_label = anchor.key
+
+        # 参考视频/音频：整段作为参考形式传入，不切片、不回灌
+        for reference in self.adapter.references:
+            if reference.pass_reference_video:
+                content.append({"type": "video_url", "video_url": {"url": f"asset://{assets[self._reference_asset_key(reference, 0)]}"}, "role": "reference_video"})
+            audio_asset_key = self._audio_asset_key(reference)
+            if reference.pass_reference_audio and reference.audio_file_url and audio_asset_key in assets:
+                content.append({"type": "audio_url", "audio_url": {"url": f"asset://{assets[audio_asset_key]}"}, "role": "reference_audio"})
+
+        job_specs = []
+        for candidate in range(1, count + 1):
+            job_id = f"custom__{ref_label}__{_safe(prompt.name)}__{candidate:02d}"
+            if job_id in existing:
+                continue
+            payload = {
+                "model": self.adapter.model,
+                "ratio": self.adapter.ratio,
+                "resolution": self.adapter.resolution,
+                "duration": duration,
+                "generate_audio": self.adapter.generate_audio,
+                "watermark": self.adapter.watermark,
+                "output_format": self.adapter.output_format,
+                "content": content,
+            }
+            job_specs.append((job_id, prompt, candidate, payload))
+
+        def _submit_one(spec):
+            job_id, prompt, candidate, payload = spec
+            task_id = self.client.submit(payload)
+            return {"id": job_id, "anchor": "custom", "anchor_label": "自由定制", "reference": ref_label, "variant": prompt.name, "candidate": candidate, "prompt": prompt.first_prompt, "task_id": task_id, "status": "submitted"}
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for job in executor.map(_submit_one, job_specs):
+                state.jobs().append(job)
+                existing.add(job["id"])
+                state.save()
+                self._progress("submitting", f"已提交 {len(existing)}/{total} 个候选", completed=len(existing), total=total)
+
+        state.update(status="submitted")
+        return state
+
     def _finish_job(self, state: RunState, job: dict) -> None:
         if job.get("status") == "done" and Path(job.get("final", "")).is_file():
             return
-        job_dir = state.path.parent / job["anchor"] / f"candidate-{job['candidate']:02d}"
+        # 目录纳入 reference 维度：同一 anchor 下多个 reference 各有独立目录，
+        # 避免 reference-1 与 reference-2 的 candidate-0N 互相覆盖（导致 ref2 视频丢失/混显）
+        job_dir = (
+            state.path.parent
+            / job["anchor"]
+            / job["reference"]
+            / f"candidate-{job['candidate']:02d}"
+        )
         result = job_dir / "result.mp4"
         self._progress("generating", f"正在等待候选 {job['id']}")
         self.client.poll_and_download(job["task_id"], result)
         self._progress("downloading", f"候选 {job['id']} 已下载")
+        final = job_dir / "final.mp4"
+        if self.adapter.mode == "custom":
+            # 自由定制：无参考/无音频回灌，下载产物即最终结果
+            shutil.copyfile(result, final)
+            with self._state_lock:
+                job.update(status="done", result=str(result), final=str(final))
+                state.save()
+            return
         try:
             reference = next(item for item in self.adapter.references if item.name == job["reference"])
         except StopIteration:
             raise ValueError(f"reference '{job['reference']}' not found in task references") from None
-        final = job_dir / "final.mp4"
         # 根据 pad_mode 裁掉 padding，再回灌原始音频
         segments = self._segments(reference)
         pad_mode = "back"
@@ -893,7 +983,16 @@ class VideoTaskRunner:
             pass
         # none: 不需要裁
         self._progress("muxing", f"正在为候选 {job['id']} 回灌音频")
-        mux_audio(video_source, self._reference_audio(reference), final)
+        # 优先用上传时实际使用的音频（audio_file_url 指向源文件，可能未经过 prepare 产物）；
+        # 否则回退到 prepare 生成的 work 产物（audio.mp3），避免纯音频任务因未 prepare 而找不到文件。
+        mux_audio_source = self._reference_audio(reference)
+        if getattr(reference, "audio_file_url", None):
+            candidate = Path(reference.audio_file_url)
+            if not candidate.is_absolute():
+                candidate = self.adapter.task_dir / candidate
+            if candidate.exists():
+                mux_audio_source = candidate
+        mux_audio(video_source, mux_audio_source, final)
         if video_source != result:
             video_source.unlink(missing_ok=True)
         with self._state_lock:

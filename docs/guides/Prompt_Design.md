@@ -3,6 +3,7 @@
 > 版本：V2.3（七层语义架构 + Lyrics Timestamp 动态渲染 + 时长对齐 offset + 可编辑 Prompt）
 > 最后更新：2026-08-15
 > 实现文件：`idolmv_pipeline/video_tasks/prompts.py`
+> 模板清单与编写规范：见 [`Seedance_Prompt_Templates.md`](./Seedance_Prompt_Templates.md)（前端 custom 模板 + 外部最佳实践 + 维护流程）
 
 主要任务：对口型、动作模仿、动作 + 对口型
 

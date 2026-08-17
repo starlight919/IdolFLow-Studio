@@ -9,7 +9,7 @@ from idolmv_pipeline.video_tasks.config import VideoWorkspaceConfig
 from idolmv_pipeline.video_tasks.prompts import build_prompt
 
 _ID = re.compile(r"[^\w\-]+", re.UNICODE)
-MODES = {"lip_sync", "dance_lip_sync", "motion"}
+MODES = {"lip_sync", "dance_lip_sync", "motion", "custom"}
 
 
 def normalize_task_id(value: str | None) -> str:
@@ -199,10 +199,14 @@ class TaskStore:
             if not path.is_file():
                 raise ValueError(f"missing lyrics: {lyrics_file}")
             lyrics = path.read_text().strip()
+        # 自由定制模式：只需 prompt，不涉及歌词/口型/锚点，跳过素材与 prompt 的生成期校验
+        custom_prompt = str(task.get("custom_prompt", "")).strip()
+        if mode == "custom":
+            if strict and not custom_prompt:
+                raise ValueError("custom mode requires custom_prompt")
         # 保存草稿（strict=False）时不校验歌词等生成期约束，仅在生成（strict=True）时严格校验
         # 自定义 prompt：整段由用户提供，无法程序校验，跳过 build_prompt
-        custom_prompt = str(task.get("custom_prompt", "")).strip()
-        if strict and not custom_prompt:
+        elif strict and not custom_prompt:
             has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
             camera_policy = task.get("camera_policy")
             build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))

@@ -323,6 +323,9 @@ def build_prompt(
     """
     lyrics = str(lyrics or "").strip()
     constraints = str(constraints or "").strip()
+    if mode == "custom":
+        # 自由定制：直接透传用户 prompt（不做七层架构包装）
+        return constraints
     if mode in {"lip_sync", "dance_lip_sync"} and not lyrics:
         raise ValueError(f"{mode} requires lyrics")
     camera = camera_policy or _CAMERA_DEFAULTS[mode]

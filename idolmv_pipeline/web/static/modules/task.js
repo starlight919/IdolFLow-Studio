@@ -3,7 +3,7 @@
 
 import store from './state.js';
 import { api, post, uploadFile, copyAssetFile, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
-import { $, $$, toast, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
+import { $, $$, toast, showErrorModal, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
 
 // ── Task Folder Relative Path ───────────────────────────────────────────────
 
@@ -99,6 +99,12 @@ export async function checkTaskFolderEmpty() {
 
 // 空目录提示里的「去现场生成」：切到现场生成说明区块并滚动到 Anchor 字段
 export function goGenerateAnchor() {
+  // 自由定制模式：复用语料的「AI 生成参考图」能力（GPT Image 2），回填到 customReferences
+  const mode = $('[name=mode]:checked')?.value;
+  if (mode === 'custom') {
+    goGenerateReference();
+    return;
+  }
   window.setAnchorSource?.('generate');
   const anchorLabel = [...document.querySelectorAll('.fields > label')].find((l) => l.textContent.includes('Anchor 文件'));
   if (anchorLabel) {
@@ -106,6 +112,212 @@ export function goGenerateAnchor() {
     anchorLabel.classList.add('flash');
     setTimeout(() => anchorLabel.classList.remove('flash'), 1600);
   }
+}
+
+// 通用「AI 生成参考图」：跳到 Generator 视图现场生成；
+// custom 模式下记下返回目标，生成后可回填到当前任务的 customReferences。
+export function goGenerateReference() {
+  const taskDir = $('#task-dir')?.value.trim() || '';
+  store.inlineAnchorReturn = { mode: 'custom', field: 'custom-anchor', dir: taskDir };
+  // 跳到 Generator 视图（openInlineAnchor 内部会预填目录并切换到该视图）
+  window.openInlineAnchor?.();
+}
+
+// 自由定制：把 Generator 生成的图加入当前任务的参考图（同步 #custom-anchor 隐藏 input + store.customReferences）
+export function addCustomReference(file) {
+  if (!file) return;
+  // 同步隐藏 input（chips 渲染的数据源）
+  const hidden = $('#custom-anchor');
+  if (hidden) {
+    const existing = new Set(lines('#custom-anchor').map((s) => s.trim()).filter(Boolean));
+    if (!existing.has(file)) {
+      hidden.value = [...existing, file].join('\n');
+      renderCustomAnchorRefs();
+    }
+  }
+  // 同步 store（formTask 提交时读取）
+  if (!store.customReferences.some((a) => a.file === file)) {
+    store.customReferences.push({ file });
+  }
+}
+
+// 自由定制：参考音视频的角色标签预设（按类型区分）。用户只选语义，编号由系统自动分配。
+const CUSTOM_REF_ROLES = {
+  video: ['动作参考', '运镜参考', '构图参考', '风格参考', '节奏参考'],
+  audio: ['节奏驱动', '音乐风格', '音色克隆', '氛围参考'],
+};
+// 自由定制：参考图的角色标签预设。
+// 社区共识（Seedance 2.0）：图负责「外观/身份/场景元素」而非运动，多图须显式分配角色。
+const CUSTOM_ANCHOR_ROLES = ['身份参考', '服装参考', '场景参考', '风格参考', '构图参考', 'Logo参考'];
+const CUSTOM_REF_ROLE_CUSTOM = '__custom__';
+
+// 渲染 custom 专属的参考音视频：可播放预览 + 角色选择（含自定义）+ 移除
+export function renderCustomRefs() {
+  const container = $('.asset-chips[data-field="custom-refs"]');
+  if (!container) return;
+  if (!store.customRefs.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = `<div class="custom-previews">${store.customRefs
+    .map((r, i) => {
+      const kindLabel = r.kind === 'audio' ? '音频' : '视频';
+      // 自动编号与 _fuseCustomRefs 的「视频1/视频2/音频1」保持一致，便于核对是否选错文件
+      let idx = i + 1;
+      const seqLabel = r.kind === 'audio' ? `音频${idx}` : `视频${idx}`;
+      const isCustom = r.role === CUSTOM_REF_ROLE_CUSTOM || (r.role && !CUSTOM_REF_ROLES[r.kind].includes(r.role));
+      const options = [
+        `<option value="" ${r.role ? '' : 'selected'}>作用（可选）…</option>`,
+        ...CUSTOM_REF_ROLES[r.kind].map(
+          (role) => `<option value="${role}" ${r.role === role ? 'selected' : ''}>${role}</option>`
+        ),
+        `<option value="${CUSTOM_REF_ROLE_CUSTOM}" ${isCustom ? 'selected' : ''}>自定义…</option>`,
+      ].join('');
+      const media = r.kind === 'audio'
+        ? `<div class="asset-audio-icon" title="点击播放 / 暂停" onclick="toggleCustomAudio(this,'${escapeAttr(r.file)}')">♪</div><audio src="${previewPath(r.file)}" preload="none"></audio>`
+        : `<video src="${previewPath(r.file)}#t=0.1" preload="metadata" muted controls onerror="console.error('Failed to load:',this.src)"></video>`;
+      const roleControl = isCustom
+        ? `<input class="chip-role-input" value="${escapeAttr(r.role === CUSTOM_REF_ROLE_CUSTOM ? '' : r.role)}" placeholder="填写作用，如：背景人声" oninput="setCustomRefRole('${escapeAttr(r.file)}', this.value)"><button type="button" class="chip-role-back" title="返回预设" onclick="resetCustomRole('${escapeAttr(r.file)}')">返回</button>`
+        : `<select class="chip-role" onchange="onCustomRoleChange('${escapeAttr(r.file)}', this.value)">${options}</select>`;
+      return `<figure class="asset-figure${r.kind === 'audio' ? ' asset-audio' : ''}" data-file="${escapeAttr(r.file)}">
+        <span class="ref-seq">${seqLabel}</span>
+        ${media}
+        <button type="button" class="asset-remove" title="移除" onclick="removeCustomRef('${escapeAttr(r.file)}')">×</button>
+        <figcaption title="${escapeAttr(r.file)}">${escapeHtml(r.file.split('/').pop())}</figcaption>
+        <div class="ref-role-row"><span class="chip-kind">${kindLabel}</span>${roleControl}<span class="help-tip" data-help="作用标签会写进 Prompt，告诉 Seedance 这个参考负责什么：视频可定 动作/运镜/构图/风格/节奏；音频可定 节奏/音乐风格/音色/氛围。不填也能生成，只是模型少一个明确指向。嫌预设不够就选「自定义…」自己写。">?</span></div>
+      </figure>`;
+    })
+    .join('')}</div>`;
+}
+
+// 角色下拉变更：若选「自定义…」则切为可输入文本框
+export function onCustomRoleChange(file, role) {
+  if (role === CUSTOM_REF_ROLE_CUSTOM) {
+    const ref = store.customRefs.find((r) => r.file === file);
+    if (ref) ref.role = CUSTOM_REF_ROLE_CUSTOM;
+    renderCustomRefs();
+    // 聚焦到刚渲染出的输入框
+    const fig = document.querySelector(`.custom-previews figure[data-file="${CSS.escape(file)}"]`);
+    fig?.querySelector('.chip-role-input')?.focus();
+    return;
+  }
+  setCustomRefRole(file, role);
+}
+
+export function setCustomRefRole(file, role) {
+  const ref = store.customRefs.find((r) => r.file === file);
+  if (ref) ref.role = role;
+}
+
+// 从自定义输入退回预设下拉（重置为未选，重渲染后默认第一项预设）
+export function resetCustomRole(file) {
+  const ref = store.customRefs.find((r) => r.file === file);
+  if (ref) ref.role = '';
+  renderCustomRefs();
+}
+
+// 音频预览点击播放 / 暂停（通用：参考音视频与自由定制共用）
+export function toggleAssetAudio(el, file) {
+  const audio = el.parentElement.querySelector('audio');
+  if (!audio) return;
+  if (audio.paused) {
+    // 暂停页面上其它正在播放的音频，避免叠音
+    document.querySelectorAll('.asset-figure audio, .custom-previews audio').forEach((a) => a !== audio && a.pause());
+    audio.play().catch(() => {});
+  } else {
+    audio.pause();
+  }
+}
+
+// 兼容旧调用（自由定制预览仍用此名）
+export function toggleCustomAudio(el, file) {
+  toggleAssetAudio(el, file);
+}
+
+export function removeCustomRef(file) {
+  store.customRefs = store.customRefs.filter((r) => r.file !== file);
+  renderCustomRefs();
+}
+
+// 自由定制参考图：带缩略图的可点击放大预览（复用全局图片 lightbox），与其他任务体验一致
+// 每个参考图可单独选「作用」（身份/服装/场景/风格/构图/Logo），不填默认"身份/风格"。
+export function renderCustomAnchorRefs() {
+  const container = $('#custom-anchor-previews');
+  if (!container) return;
+  const files = lines('#custom-anchor').map((s) => s.trim()).filter(Boolean);
+  if (!files.length) {
+    container.innerHTML = '';
+    return;
+  }
+  // 与 store.customReferences 中的 role 对齐（保证重渲染/回填后角色不丢）
+  ensureCustomAnchorRoles(files);
+  container.innerHTML = files
+    .map((f, i) => {
+      const ref = store.customReferences.find((a) => a.file === f);
+      const role = ref ? ref.role || '' : '';
+      const seqLabel = `参考图${i + 1}`;
+      const isCustom = role === CUSTOM_REF_ROLE_CUSTOM || (role && !CUSTOM_ANCHOR_ROLES.includes(role));
+      const options = [
+        `<option value="" ${role ? '' : 'selected'}>作用（可选）…</option>`,
+        ...CUSTOM_ANCHOR_ROLES.map(
+          (r) => `<option value="${r}" ${role === r ? 'selected' : ''}>${r}</option>`
+        ),
+        `<option value="${CUSTOM_REF_ROLE_CUSTOM}" ${isCustom ? 'selected' : ''}>自定义…</option>`,
+      ].join('');
+      const roleControl = isCustom
+        ? `<input class="chip-role-input" value="${escapeAttr(role === CUSTOM_REF_ROLE_CUSTOM ? '' : role)}" placeholder="填写作用，如：配饰风格" oninput="setCustomAnchorRole('${escapeAttr(f)}', this.value)"><button type="button" class="chip-role-back" title="返回预设" onclick="resetCustomAnchorRole('${escapeAttr(f)}')">返回</button>`
+        : `<select class="chip-role" onchange="onCustomAnchorRoleChange('${escapeAttr(f)}', this.value)">${options}</select>`;
+      return `<figure class="asset-figure asset-anchor" data-file="${escapeAttr(f)}">
+        <span class="ref-seq">${seqLabel}</span>
+        <img src="${previewPath(f)}" alt="${escapeAttr(f.split('/').pop())}" loading="lazy">
+        <button type="button" class="asset-remove" title="移除" onclick="removeCustomAnchor('${escapeAttr(f)}')">×</button>
+        <figcaption title="${escapeAttr(f)}">${escapeHtml(f.split('/').pop())}</figcaption>
+        <div class="ref-role-row"><span class="chip-kind">参考图</span>${roleControl}<span class="help-tip" data-help="作用标签会写进 Prompt，告诉 Seedance 这张图负责什么：身份/服装/场景/风格/构图/Logo。图管外观，视频管动作/运镜，按域分工避免冲突。不填默认作为「身份/风格」参考。">?</span></div>
+      </figure>`;
+    })
+    .join('');
+}
+
+// 保证 store.customReferences 与隐藏 input 的文件列表一一对应（缺的补 {file, role:''}）
+function ensureCustomAnchorRoles(files) {
+  const have = new Set(store.customReferences.map((a) => a.file));
+  for (const f of files) {
+    if (!have.has(f)) store.customReferences.push({ file: f, role: '' });
+  }
+  store.customReferences = store.customReferences.filter((a) => files.includes(a.file));
+}
+
+export function setCustomAnchorRole(file, role) {
+  const ref = store.customReferences.find((a) => a.file === file);
+  if (ref) ref.role = role;
+}
+
+export function onCustomAnchorRoleChange(file, role) {
+  if (role === CUSTOM_REF_ROLE_CUSTOM) {
+    const ref = store.customReferences.find((a) => a.file === file);
+    if (ref) ref.role = CUSTOM_REF_ROLE_CUSTOM;
+    renderCustomAnchorRefs();
+    const fig = document.querySelector(`.custom-previews figure[data-file="${CSS.escape(file)}"]`)
+      || document.querySelector(`#custom-anchor-previews figure[data-file="${CSS.escape(file)}"]`);
+    fig?.querySelector('.chip-role-input')?.focus();
+    return;
+  }
+  setCustomAnchorRole(file, role);
+}
+
+export function resetCustomAnchorRole(file) {
+  const ref = store.customReferences.find((a) => a.file === file);
+  if (ref) ref.role = '';
+  renderCustomAnchorRefs();
+}
+
+export function removeCustomAnchor(file) {
+  const existing = new Set(lines('#custom-anchor').map((s) => s.trim()).filter(Boolean));
+  existing.delete(file);
+  const hidden = $('#custom-anchor');
+  if (hidden) hidden.value = [...existing].join('\n');
+  store.customReferences = store.customReferences.filter((a) => a.file !== file);
+  renderCustomAnchorRefs();
 }
 
 // ── Preview Helpers ─────────────────────────────────────────────────────────
@@ -137,6 +349,7 @@ export function renderAssetChips(field) {
 export function renderVideoAssetPreviews() {
   renderAssetChips('anchors');
   renderAssetChips('references');
+  renderCustomAnchorRefs();
   const anchorFiles = lines('#anchors');
   // 根据当前 ref-tab 决定读视频字段还是音频字段
   const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
@@ -155,7 +368,7 @@ export function renderVideoAssetPreviews() {
       ? referenceFiles.map((file) => {
           const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file);
           const media = isAudio
-            ? `<div class="asset-audio-icon">♪</div>`
+            ? `<div class="asset-audio-icon" title="点击播放 / 暂停" onclick="toggleAssetAudio(this,'${escapeAttr(file)}')">♪</div><audio src="${previewPath(file)}" preload="none"></audio>`
             : `<video src="${previewPath(file)}#t=0.1" preload="metadata" muted onerror="console.error('Failed to load:',this.src)"></video>`;
           return `<figure class="asset-figure${isAudio ? ' asset-audio' : ''}" data-file="${escapeAttr(file)}">${media}<button type="button" class="asset-remove" data-type="references" data-file="${escapeAttr(file)}" title="取消选中">✕</button><figcaption>${escapeHtml(file.split('/').pop())}</figcaption></figure>`;
         }).join('')
@@ -188,7 +401,7 @@ function _syncPassAudioDisabled() {
 }
 
 export function removeVideoAsset(type, file) {
-  let target = type === 'anchors' ? '#anchors' : '#references';
+  let target = type === 'anchors' ? '#anchors' : type === 'custom-anchor' ? '#custom-anchor' : '#references';
   // references 在音频 tab 下操作 #audio-refs
   if (type === 'references') {
     const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
@@ -226,6 +439,20 @@ export async function openAssetPicker(category, opts = {}) {
     store.assetPickerSelected = new Set();
     $('#asset-picker-title').textContent = '添加 Anchor 参考图';
   } else {
+    // 兜底：表单 #task-dir 为空时，若已加载某任务则从其 task_dir 回填，
+    // 避免从任务列表/Aseets 等入口进入素材选择器时误报「请先选择任务文件夹」
+    if (!taskFolderRelative().trim() && store.currentTask?.task_dir) {
+      const dataRoot = store.workspaceSettings?.data_root || '';
+      let fallback = store.currentTask.data_dir || '';
+      if (dataRoot) {
+        const norm = (p) => p.replace(/\/+$/, '');
+        if (norm(store.currentTask.task_dir).startsWith(norm(dataRoot) + '/')) {
+          fallback = norm(store.currentTask.task_dir).slice(norm(dataRoot).length + 1);
+        }
+      }
+      $('#task-dir').value = fallback;
+      checkTaskFolderEmpty();
+    }
     const root = taskFolderRelative().replace(/\/+$/, '');
     if (!root) {
       toast('请先选择任务文件夹（步骤 1），再添加素材');
@@ -234,13 +461,21 @@ export async function openAssetPicker(category, opts = {}) {
     store.assetPickerRoot = root;
     store.assetPickerTaskId = root;
     // 分类决定默认目录（约定：图片 → anchors/，音视频 → references/）。
+    // custom-anchor（自由定制参考图）也是图片，落 anchors/；custom-references（自由定制参考音视频）落 references/。
     // 若默认目录不存在，browseAssets 会自动逐级回退到任务根目录。
-    store.assetPickerPath = `${root}/${category === 'anchors' ? 'anchors' : 'references'}`;
-    // 已选中项：references 在音频 tab 下读 #audio-refs
+    const isImageCategory = category === 'anchors' || category === 'custom-anchor';
+    store.assetPickerPath = `${root}/${isImageCategory ? 'anchors' : 'references'}`;
+    // 已选中项：
+    // - references 在音频 tab 下读 #audio-refs（锚点流程）
+    // - custom-references 读 store.customRefs（自由定制专属，与锚点流程完全隔离）
     const isAudioTab = category === 'references'
       && document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
-    store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : (isAudioTab ? '#audio-refs' : '#references')));
-    $('#asset-picker-title').textContent = category === 'anchors' ? '选择 Anchor 图片' : '选择参考音视频';
+    if (category === 'custom-references') {
+      store.assetPickerSelected = new Set(store.customRefs.map((r) => r.file));
+    } else {
+      store.assetPickerSelected = new Set(lines(category === 'anchors' ? '#anchors' : category === 'custom-anchor' ? '#custom-anchor' : (isAudioTab ? '#audio-refs' : '#references')));
+    }
+    $('#asset-picker-title').textContent = isImageCategory ? '选择参考图' : '选择参考音视频';
   }
   $('#asset-picker-modal').hidden = false;
   _resetPickerUpload();
@@ -266,10 +501,13 @@ export function closeAssetPicker() {
 const _pickerUpload = { session: 0, uploading: false, rows: [] };
 
 function _pickerUploadAccept() {
-  return store.assetPickerCategory === 'references'
+  return store.assetPickerCategory === 'references' || store.assetPickerCategory === 'custom-references'
     ? '.mp4,.mov,.m4v,.webm,.avi,.mkv,.mp3,.wav,.m4a,.aac,.flac,.ogg'
     : 'image/*';
 }
+
+// 图片类 category：anchors（Anchor 图）与 custom-anchor（自由定制参考图）共用图片语义
+const _isImageCategory = (category) => category === 'anchors' || category === 'custom-anchor';
 
 // 上传落点与勾选值约定（与后端 handle_upload 一一对应，勿改动单边）：
 // - anchors:           X-Category=anchors           → data/<dir>/anchors/<name>，返回 anchors/<name>，
@@ -287,7 +525,7 @@ function _pickerUploadContext() {
       value: (serverPath) => String(serverPath).split('/').pop(),
     };
   }
-  const sub = category === 'anchors' ? 'anchors' : 'references';
+  const sub = _isImageCategory(category) ? 'anchors' : 'references';
   return {
     taskId: store.assetPickerTaskId,
     destRel: `${store.assetPickerRoot}/${sub}`,
@@ -318,7 +556,7 @@ export function switchPickerTab(tab) {
   // 引导行按 tab 说明当前能做什么、另一个 tab 是干什么的，
   // 让「本机上传」入口即使不点也看得懂
   const label = store.assetPickerCategory === 'references' ? '音视频'
-    : store.assetPickerCategory === 'anchor-references' ? '参考图' : '图片';
+    : _isImageCategory(store.assetPickerCategory) || store.assetPickerCategory === 'anchor-references' ? '参考图' : '图片';
   const hintEl = $('#asset-picker-hint');
   if (hintEl) {
     hintEl.textContent = isUpload
@@ -475,7 +713,8 @@ export async function browseAssets(path) {
     data.items.forEach((item) => {
       if (!item.directory && isOutside(item)) store.assetPickerOutside.set(relative(item), item.path);
     });
-    const extRe = store.assetPickerCategory === 'references'
+    const isAudioVideoCategory = store.assetPickerCategory === 'references' || store.assetPickerCategory === 'custom-references';
+    const extRe = isAudioVideoCategory
       ? /\.(mp4|mov|m4v|webm|mp3|wav|m4a|aac|flac|ogg)$/i
       : /\.(png|jpe?g|webp)$/i;
     const allowed = (item) => extRe.test(item.name);
@@ -485,7 +724,7 @@ export async function browseAssets(path) {
     const INTERNAL_DIR = /^(seedance|tasks|\.|\.\.)$/i;
     const allowedDir = (item) => {
       if (INTERNAL_DIR.test(item.name)) return false;
-      if (store.assetPickerCategory === 'references') {
+      if (isAudioVideoCategory) {
         return !/^anchors?$|anchor/i.test(item.name);
       }
       return !/^(references?|audio|videos?)$/i.test(item.name);
@@ -503,7 +742,7 @@ export async function browseAssets(path) {
         const rootData = await api(`/api/files?root=data_root&path=${encodeURIComponent(root)}`);
         const rootFiles = (rootData.items || []).filter((item) => !item.directory && allowed(item));
         if (rootFiles.length > 0) {
-          const label = store.assetPickerCategory === 'anchors' ? '图片' : '音视频';
+          const label = _isImageCategory(store.assetPickerCategory) ? '图片' : '音视频';
           rootHint = `<button class="asset-root-hint" onclick="browseAssets('${escapeAttr(root)}')"><span>💡 当前目录没有可选${label}，主目录里有 ${rootFiles.length} 个</span><span>去主目录 ›</span></button>`;
         }
       } catch {
@@ -541,7 +780,7 @@ export async function browseAssets(path) {
                 ? `<button onclick="browseAssets('${escapeAttr(item.path)}')"><span>${escapeHtml(item.name)}</span><span>›</span></button>`
                 : '')
             : allowed(item)
-              ? `<label class="file-option">${(store.assetPickerCategory === 'anchors' || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span class="file-name">${escapeHtml(item.name)}</span>${store.assetPickerCategory === 'references' && !isOutside(item) ? `<span class="file-kind ${isAudioName(item.name) ? 'kind-audio' : 'kind-video'}">${isAudioName(item.name) ? '🎵 音频' : '🎬 视频'}</span>` : ''}${isOutside(item) ? '<span class="file-kind kind-copy" title="不在当前任务文件夹内，添加时会自动复制过来">⧉ 跨文件夹 · 添加时复制</span>' : ''}<input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
+              ? `<label class="file-option">${(_isImageCategory(store.assetPickerCategory) || store.assetPickerCategory === 'anchor-references') ? `<img class="file-thumb" src="/api/file-preview?root=data_root&path=${encodeURIComponent(item.path)}" loading="lazy" onerror="this.style.display='none'" alt="">` : ''}<span class="file-name">${escapeHtml(item.name)}</span>${isAudioVideoCategory && !isOutside(item) ? `<span class="file-kind ${isAudioName(item.name) ? 'kind-audio' : 'kind-video'}">${isAudioName(item.name) ? '🎵 音频' : '🎬 视频'}</span>` : ''}${isOutside(item) ? '<span class="file-kind kind-copy" title="不在当前任务文件夹内，添加时会自动复制过来">⧉ 跨文件夹 · 添加时复制</span>' : ''}<input type="checkbox" value="${escapeHtml(relative(item))}" ${store.assetPickerSelected.has(relative(item)) ? 'checked' : ''} onchange="toggleAsset(this)"></label>`
               : ''
         )
         .join('') +
@@ -549,7 +788,7 @@ export async function browseAssets(path) {
       (visibleItems.length === 0 && !hasVisibleDirs
         ? (store.assetPickerCategory === 'anchor-references'
             ? `<div class="asset-empty-tip">📂 当前目录还没有参考图。<div class="asset-empty-actions"><button class="secondary small" onclick="switchPickerTab('upload')">⬆ 从本机上传</button></div>或手动把图片放到：<br><code>data/${escapeHtml(store.assetPickerRoot || store.assetPickerPath || '<任务文件夹>/anchors/anchor-references')}</code></div>`
-            : `<div class="asset-empty-tip">📂 当前目录没有可选${store.assetPickerCategory === 'references' ? '音视频' : '图片'}。<div class="asset-empty-actions"><button class="secondary small" onclick="switchPickerTab('upload')">⬆ 从本机上传</button></div>也可以把文件手动放到任务文件夹后重新打开。</div>`)
+            : `<div class="asset-empty-tip">📂 当前目录没有可选${isAudioVideoCategory ? '音视频' : '图片'}。<div class="asset-empty-actions"><button class="secondary small" onclick="switchPickerTab('upload')">⬆ 从本机上传</button></div>也可以把文件手动放到任务文件夹后重新打开。</div>`)
         : '');
   } catch (e) {
     toast(e.message);
@@ -688,7 +927,22 @@ export async function confirmAssetSelection() {
     return;
   }
 
-  let target = store.assetPickerCategory === 'anchors' ? '#anchors' : '#references';
+  // 自由定制专属：参考音视频按文件类型自动分视频/音频并写入 store.customRefs（完全隔离锚点流程的 #references/#audio-refs）
+  if (store.assetPickerCategory === 'custom-references') {
+    [...store.assetPickerSelected].forEach((file) => {
+      const kind = isAudioName(file) ? 'audio' : 'video';
+      if (!store.customRefs.some((r) => r.file === file)) {
+        store.customRefs.push({ file, kind, role: '' });
+      }
+    });
+    renderCustomRefs();
+    checkTaskFolderEmpty();
+    closeAssetPicker();
+    return;
+  }
+
+  let target = store.assetPickerCategory === 'anchors' ? '#anchors'
+    : store.assetPickerCategory === 'custom-anchor' ? '#custom-anchor' : '#references';
   // 参考音视频：按「文件类型」分别归位到正确 tab/字段，两个 tab 可共存（视频 + 独立音频对口型）——
   // 音频文件 → 音频 tab / #audio-refs；视频文件 → 视频 tab / #references。避免在视频 tab 选了音频却落到视频字段。
   if (store.assetPickerCategory === 'references') {
@@ -843,10 +1097,12 @@ export async function chooseFolder() {
   if (inputId === '#task-dir' && newPath !== oldPath) {
     const hasSelected =
       lines('#anchors').length > 0 ||
+      lines('#custom-anchor').length > 0 ||
       lines('#references').length > 0 ||
       lines('#audio-refs').length > 0 ||
       !!($('#lyrics')?.value.trim()) ||
-      !!($('#constraints')?.value.trim());
+      !!($('#constraints')?.value.trim()) ||
+      !!($('#custom-prompt')?.value.trim());
     const promptTA = $('#prompt-preview');
     const hasCustomPrompt = store.customPromptDirty && (promptTA?.value || '').trim();
     if (hasSelected || hasCustomPrompt) {
@@ -865,10 +1121,12 @@ export async function chooseFolder() {
     }
     // 清空上一个文件夹残留的素材、歌词、约束和自定义 Prompt
     $('#anchors').value = '';
+    $('#custom-anchor').value = '';
     $('#references').value = '';
     $('#audio-refs').value = '';
     if ($('#lyrics')) $('#lyrics').value = '';
     if ($('#constraints')) $('#constraints').value = '';
+    if ($('#custom-prompt')) $('#custom-prompt').value = '';
     if (promptTA) promptTA.value = '';
     store.customPromptDirty = false;
     // 素材已清空，同步清掉编辑态，否则后续保存仍按「更新旧任务」弹二选一、
@@ -921,6 +1179,226 @@ export function taskFolderName() {
 
 // ── Task Form ───────────────────────────────────────────────────────────────
 
+// 自由定制（custom）的 Prompt 模板：帮助用户结构化描述，替换【】占位后即可用。
+// 覆盖常见视频类别，均为 Seedance 2.5 文生/图生/视频生视频友好的写法。
+// 统一结构：主体 + 动作 + 场景 + 分时段运镜 + 参考说明 + 镜头/画质/氛围。
+const CUSTOM_PROMPT_TEMPLATES = [
+  {
+    group: '通用骨架',
+    name: '标准结构（推荐）',
+    template: '【主体】在【场景】中【动作】。镜头运动：0-3s【缓慢推近】，3-8s【环绕主体】，8s后【缓缓拉远】。参考图用于【身份/风格】，参考视频用于【动作/风格参考】，参考音频用于【克隆音色/氛围】。电影质感，细节精致，光线【自然光/霓虹/柔光】。',
+  },
+  {
+    group: '通用骨架',
+    name: '分时段运镜',
+    template: '【主体】【动作】。运镜分镜：0-2s【固定特写】，2-5s【缓慢横移】，5-9s【环绕上升】，9s后【拉远收尾】。色调【冷暖】，电影级画面。',
+  },
+  {
+    group: '人物',
+    name: '人物肖像',
+    template: '一位【外貌特征】的【人物】，【动作描述】，身处【场景】。镜头运动：0-3s【推近面部】，3-7s【环绕】，电影质感，细节精致，光线【柔光/侧光】。',
+  },
+  {
+    group: '人物',
+    name: '时尚走秀',
+    template: '【人物】穿着【服装】在【场景】走秀。镜头运动：0-4s【正面推近】，4-8s【侧跟环绕】，8s后【拉远全景】。灯光【聚光/霓虹】，时尚大片质感，动态流畅。',
+  },
+  {
+    group: '风景 / 空镜',
+    name: '自然风光',
+    template: '【地点/景物】的航拍/广角镜头，【时间与天气】，【动态元素：云/水/风】。运镜：0-5s【缓慢前推】，5s后【平移横移】。色调【冷暖】，电影级画面。',
+  },
+  {
+    group: '风景 / 空镜',
+    name: '城市夜景',
+    template: '【城市】夜景，霓虹灯与车流。镜头运动：0-4s【低角度推进】，4-9s【环绕楼宇】，延时摄影感，电影感，细节丰富。',
+  },
+  {
+    group: '氛围 / 抽象',
+    name: '氛围粒子',
+    template: '【主体】在【空间】中缓缓【运动】，【粒子/光影】环绕。运镜：0-3s【推近】，3s后【缓慢旋转】。梦幻氛围，电影质感。',
+  },
+  {
+    group: '氛围 / 抽象',
+    name: '水墨 / 艺术',
+    template: '【主题】以【水墨/油画/插画】风格呈现，【动态】流动。镜头运动：0-5s【横向平移如画卷展开】，5s后【轻微推近】。笔触细腻，艺术质感。',
+  },
+  {
+    group: '动物 / 生物',
+    name: '动物特写',
+    template: '一只【动物】在【场景】中【动作】。运镜：0-3s【特写推近】，3-7s【跟随平移】，毛发/细节清晰，自然光，电影质感。',
+  },
+  {
+    group: '美食 / 产品',
+    name: '美食特写',
+    template: '【食物】的特写镜头，【动作/蒸汽/浇汁】。镜头运动：0-3s【俯拍推近】，3s后【侧移环绕】。食欲感，美食摄影质感。',
+  },
+  {
+    group: '产品 / 科技',
+    name: '产品展示',
+    template: '【产品】在【背景】中旋转展示，【灯光】。运镜：0-4s【正面推近】，4-8s【环绕旋转】，8s后【拉远】。金属/玻璃质感，商业广告风格。',
+  },
+  {
+    group: '参考生视频 (R2V)',
+    name: '视频定动作',
+    template: '【主体】在【场景】中【动作】。参考视频用于【动作参考：起跳、转身、落地的大致速度与姿态】，画面优先保证主体清晰。运镜：0-3s【跟随推近】，3s后【环绕】。电影质感。',
+  },
+  {
+    group: '参考生视频 (R2V)',
+    name: '视频定运镜',
+    template: '【主体】在【场景】。参考视频用于【运镜参考：构图、镜头路径与速度】，最后停在最正面。物体形状以本 Prompt 为准，不被参考视频里的物体干扰。运镜：0-5s【缓慢环绕】，5s后【正面停住】。',
+  },
+  {
+    group: '参考生视频 (R2V)',
+    name: '音频卡节奏',
+    template: '【主体】在【场景】中【动作】。参考音频用于【节奏驱动】：第一拍【推镜】，第四拍【揭示主体/产品】，节拍收尾定格。音乐/氛围与画面匹配。电影质感。',
+  },
+  {
+    group: '参考生视频 (R2V)',
+    name: '多参考组合',
+    template: '【主体】在【场景】。参考图用于【身份/风格】；参考视频1用于【动作】，参考视频2用于【运镜/构图】，参考音频用于【节奏/音乐风格】。每份参考只负责一件事，冲突时以本 Prompt 描述优先。运镜：0-4s【推近】，4-8s【环绕】，8s后【拉远】。',
+  },
+];
+
+// 初始化模板下拉框（按分组填充 optgroup）
+export function initCustomPromptTemplates() {
+  const select = $('#custom-prompt-template');
+  if (!select) return;
+  const groups = {};
+  CUSTOM_PROMPT_TEMPLATES.forEach((t) => {
+    (groups[t.group] = groups[t.group] || []).push(t);
+  });
+  select.innerHTML = '<option value="">自由书写（推荐）</option>'
+    + Object.entries(groups).map(([group, items]) =>
+      `<optgroup label="${escapeHtml(group)}">${items.map((t) => `<option value="${escapeAttr(t.name)}">${escapeHtml(t.name)}</option>`).join('')}</optgroup>`
+    ).join('');
+}
+
+// 选中模板 → 填入 prompt 输入框（【】占位留给用户替换）
+export function applyCustomPromptTemplate() {
+  const select = $('#custom-prompt-template');
+  const promptTA = $('#custom-prompt');
+  if (!select || !promptTA) return;
+  const name = select.value;
+  if (!name) return;
+  const t = CUSTOM_PROMPT_TEMPLATES.find((x) => x.name === name);
+  if (!t) return;
+  promptTA.value = t.template;
+  promptTA.focus();
+}
+
+/** 从素材面板构建参考音视频列表（锚点流程与自由定制共用同一套逻辑）。
+ * - 音频 tab：纯音频模式，不传视频。
+ * - 视频 tab：传视频 + 可选「独立音频」（按行号与视频一一配对）。 */
+function _buildReferences() {
+  const videoRefs = lines('#references');
+  const audioRefs = lines('#audio-refs');
+  const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
+  if (isAudioTab) {
+    return audioRefs.map((file, i) => ({
+      name: `reference-${i + 1}`,
+      file,
+      duration: 15,
+      pass_reference_audio: true,
+      pass_reference_video: false,
+      pad_mode: 'none',
+    }));
+  }
+  // 独立音频按行号与视频一一配对：保留 #audio-refs 中的空行占位（editTask 回填时按
+  // reference 顺序生成，空行 = 该视频无独立音频），因此必须用原始行读取而不是 lines() 过滤
+  const padEl = document.getElementById('pad-mode');
+  const passAudioEl = document.getElementById('pass-reference-audio');
+  const audioRaw = ($('#audio-refs')?.value || '').split('\n').map((v) => v.trim());
+  const audioCount = audioRaw.filter(Boolean).length;
+  if (audioCount > videoRefs.length) {
+    throw new Error(`独立音频（${audioCount} 个）多于参考视频（${videoRefs.length} 个），请按「每行视频对应一行音频、无则留空」配对`);
+  }
+  return videoRefs.map((file, i) => {
+    const ownAudio = audioRaw[i] || null;
+    return {
+      name: `reference-${i + 1}`,
+      file,
+      duration: 15,
+      // 有独立音频 → 用独立音频对口型（pass_reference_audio 强制 true，上传它）；
+      // 无独立音频 → 按「传参考音频」勾选决定是否从视频提取
+      pass_reference_audio: ownAudio ? true : (passAudioEl?.checked ?? true),
+      pass_reference_video: true,
+      pad_mode: padEl?.value || 'none',
+      ...(ownAudio ? { audio_file: ownAudio } : {}),
+    };
+  });
+}
+
+/** 自由定制：把「参考作用说明」融合进 Prompt。
+ * 用户按行写「音频：克隆音色」「视频1：动作参考」，这里过滤空行后，
+ * 以自然语言追加到 Prompt 末尾，让 Seedance 知道每个参考的用途。 */
+// 自由定制：把参考图 + 参考音视频的角色标签融合进 Prompt。
+// 系统按类型自动编号（参考图1/2…，视频1/2…，音频1/2…），用户只需选语义标签；#custom-refs-roles 为可选补充备注。
+// 社区共识（Seedance 2.0）：参考素材是导演指令而非素材复制——每份只负责一件事，且需在 Prompt 里显式声明分工。
+// - 图管外观/身份/场景元素，视频管动作/运镜/特效，音频管节奏/氛围；
+// - 多参考须显式分配角色（模型按分配执行，不自动裁决）；
+// - 参考说明作为「高级指令」放在 Prompt 前部（紧接主体描述之前），比追加到末尾更能降低随机性。
+function _fuseCustomRefs(prompt) {
+  const parts = [];
+  // 参考图（custom-anchor）：角色由用户选，默认「身份/风格」
+  const anchors = lines('#custom-anchor').map((s) => s.trim()).filter(Boolean);
+  ensureCustomAnchorRoles(anchors);
+  anchors.forEach((file, i) => {
+    const ref = store.customReferences.find((a) => a.file === file);
+    const role = ref && ref.role && ref.role !== CUSTOM_REF_ROLE_CUSTOM ? ref.role : '身份/风格';
+    parts.push(`参考图${i + 1}（${role}）：${file.split('/').pop()}`);
+  });
+  // 参考音视频（customRefs）：按类型自动编号，用户选语义角色
+  let vIdx = 0;
+  let aIdx = 0;
+  for (const r of store.customRefs) {
+    const tag = r.kind === 'audio' ? `音频${++aIdx}` : `视频${++vIdx}`;
+    const name = r.file.split('/').pop();
+    parts.push(r.role ? `${tag}（${r.role}）：${name}` : `${tag}：${name}`);
+  }
+  const notes = lines('#custom-refs-roles').map((s) => s.replace(/[:：]\s*$/, '').trim()).filter(Boolean);
+  const segments = [];
+  if (parts.length) segments.push(parts.join('；'));
+  if (notes.length) segments.push(notes.join('；'));
+  // 自动优先级裁决句：同时有图与音视频时，显式声明外观以图为准（域隔离避免冲突）
+  if (anchors.length && store.customRefs.length) {
+    segments.push('外观与身份以参考图为准；视频仅参考其运镜/动作，不复制其画面元素；音频仅参考节奏/氛围（除非备注要求替换音轨）。');
+  }
+  if (!segments.length) return prompt;
+  const refBlock = `参考说明：${segments.join('；')}。`;
+  // 放到 Prompt 前部（作为高级指令），而非末尾追加：社区实践证明能更稳地约束生成
+  return `${refBlock}\n${prompt}`;
+}
+
+// 自由定制专属：从 store.customRefs 构建后端 references 数组（与锚点流程的 _buildReferences 完全隔离）
+function _buildCustomReferences() {
+  const refs = [];
+  let vIdx = 0;
+  let aIdx = 0;
+  for (const r of store.customRefs) {
+    const idx = r.kind === 'audio' ? ++aIdx : ++vIdx;
+    const name = `参考${r.kind === 'audio' ? '音频' : '视频'}${idx}`;
+    if (r.kind === 'audio') {
+      refs.push({
+        name,
+        file: r.file,
+        pass_reference_video: false,  // 不使用视频配对（自由定制无需对口型配对）
+        pass_reference_audio: true,
+        audio_file_url: taskFolderRelative() ? `${taskFolderRelative().replace(/\/$/, '')}/${r.file}` : r.file,
+      });
+    } else {
+      refs.push({
+        name,
+        file: r.file,
+        pass_reference_video: true,
+        pass_reference_audio: false,
+        audio_file_url: null,
+      });
+    }
+  }
+  return refs;
+}
+
 export function formTask() {
   const name = ($('#task-name')?.value || '').trim();
   const taskDir = $('#task-dir').value.trim();
@@ -928,54 +1406,44 @@ export function formTask() {
   if (!taskDir) throw new Error('请选择任务文件夹');
   const dataRoot = store.workspaceSettings?.data_root || '';
   const dirName = taskDir.split('/').pop() || taskDir;
+  const mode = $('[name=mode]:checked').value;
+  if (mode === 'custom') {
+    const prompt = ($('#custom-prompt')?.value || '').trim();
+    if (!prompt) throw new Error('自由定制模式必须填写 Prompt');
+    return {
+      name,
+      task_dir: dataRoot + '/' + taskDir,
+      data_dir: dirName,
+      mode: 'custom',
+      candidates: Number($('#candidates').value),
+      filename_prefix: name,
+      anchors: lines('#custom-anchor').map((file, i) => {
+        ensureCustomAnchorRoles([file]);
+        const ref = store.customReferences.find((a) => a.file === file);
+        return { key: `ref-${i + 1}`, label: `参考图 ${i + 1}`, file, role: ref?.role || '' };
+      }),
+      // 自由定制专属参考音视频（按类型自动编号，用户只选角色标签），与锚点流程的 references 构建完全隔离
+      references: _buildCustomReferences(),
+      custom_refs: store.customRefs,  // 前端回填用（含 kind/role），后端忽略此字段
+      // 把「参考作用说明」（自动编号 + 补充备注）融合进 Prompt，让 Seedance 理解每个参考的用途
+      custom_prompt: _fuseCustomRefs(prompt),
+      duration: Number($('#custom-duration')?.value || 5),
+      resolution: $('#video-resolution')?.value || '720p',
+      ratio: $('#video-ratio')?.value || '9:16',
+      generate_audio: $('#video-generate-audio')?.checked ?? false,
+      watermark: $('#video-watermark')?.checked ?? false,
+      output_format: $('#video-output-format')?.value || 'mp4',
+    };
+  }
   return {
     name,
     task_dir: dataRoot + '/' + taskDir,
     data_dir: dirName,
-    mode: $('[name=mode]:checked').value,
+    mode,
     candidates: Number($('#candidates').value),
     filename_prefix: name,
     anchors: lines('#anchors').map((file, i) => ({ key: `anchor-${i + 1}`, label: `Anchor ${i + 1}`, file })),
-    references: (() => {
-      const videoRefs = lines('#references');
-      const audioRefs = lines('#audio-refs');
-      // 当前在音频 tab 下：纯音频模式，不传视频
-      const isAudioTab = document.querySelector('.ref-tab.active[data-ref-tab]')?.dataset?.refTab === 'audio';
-      if (isAudioTab) {
-        return audioRefs.map((file, i) => ({
-          name: `reference-${i + 1}`,
-          file,
-          duration: 15,
-          pass_reference_audio: true,
-          pass_reference_video: false,
-          pad_mode: 'none',
-        }));
-      }
-      // 视频 tab：传视频 + 可选「独立音频」（音频 tab 传的，对口型源，优先于从视频提取）
-      // 独立音频按行号与视频一一配对：保留 #audio-refs 中的空行占位（editTask 回填时按
-      // reference 顺序生成，空行 = 该视频无独立音频），因此必须用原始行读取而不是 lines() 过滤
-      const padEl = document.getElementById('pad-mode');
-      const passAudioEl = document.getElementById('pass-reference-audio');
-      const audioRaw = ($('#audio-refs')?.value || '').split('\n').map((v) => v.trim());
-      const audioCount = audioRaw.filter(Boolean).length;
-      if (audioCount > videoRefs.length) {
-        throw new Error(`独立音频（${audioCount} 个）多于参考视频（${videoRefs.length} 个），请按「每行视频对应一行音频、无则留空」配对`);
-      }
-      return videoRefs.map((file, i) => {
-        const ownAudio = audioRaw[i] || null;
-        return {
-          name: `reference-${i + 1}`,
-          file,
-          duration: 15,
-          // 有独立音频 → 用独立音频对口型（pass_reference_audio 强制 true，上传它）；
-          // 无独立音频 → 按「传参考音频」勾选决定是否从视频提取
-          pass_reference_audio: ownAudio ? true : (passAudioEl?.checked ?? true),
-          pass_reference_video: true,
-          pad_mode: padEl?.value || 'none',
-          ...(ownAudio ? { audio_file: ownAudio } : {}),
-        };
-      });
-    })(),
+    references: _buildReferences(),
     lyrics: $('#lyrics').value.trim(),
     constraints: $('#constraints').value.trim(),
     // 自定义 prompt：仅当用户在预览框手动编辑过才带上，否则后端自动生成
@@ -1024,7 +1492,63 @@ export function updateMode() {
   const radio = $('[name=mode]:checked');
   if (!radio) return;
   const mode = radio.value;
-  $('#lyrics-wrap').style.display = mode === 'motion' ? 'none' : 'flex';
+  // 自由定制：显示素材面板内的「创意 Prompt 与参考」区块 + 参考视频/音频接口；
+  // 隐藏 Anchor（身份图）、歌词、约束与时长对齐——这些与自由定制无关。
+  const customBlock = $('#custom-materials-block');
+  const materialsPanel = $('#task-materials-panel');
+  const isCustom = mode === 'custom';
+  if (customBlock) customBlock.hidden = !isCustom;
+  if (materialsPanel) materialsPanel.hidden = false;
+  // custom 模式下，面板标题更贴合内容（含 Prompt）；其余模式统一为「3. 素材」
+  const materialsH3 = materialsPanel?.querySelector(':scope > h3');
+  if (materialsH3) materialsH3.textContent = isCustom ? '3. 创意 Prompt 与参考' : '3. 素材';
+  if (isCustom) {
+    const anchorSection = $('#anchor-section');
+    if (anchorSection) anchorSection.style.display = 'none';
+    const lyricsWrap = $('#lyrics-wrap');
+    if (lyricsWrap) lyricsWrap.style.display = 'none';
+    const constraintsWrap = $('#constraints-wrap');
+    if (constraintsWrap) constraintsWrap.style.display = 'none';
+    // 自由定制：隐藏通用「参考音视频」（锚点流程专属，含音频配对等），改用 custom 专属带标签选择器
+    const refAvCommon = $('#ref-av-common');
+    if (refAvCommon) refAvCommon.style.display = 'none';
+    // 原「参考作用说明」是手填序号的，custom 已改为自动编号，故隐藏，改用「补充备注」
+    const refRoles = $('#reference-roles-wrap');
+    if (refRoles) refRoles.hidden = true;
+    const customRefsLabel = $('#custom-refs-label');
+    if (customRefsLabel) customRefsLabel.style.display = '';
+    const customRefsRoles = $('#custom-refs-roles-wrap');
+    if (customRefsRoles) customRefsRoles.hidden = false;
+    renderCustomRefs();
+    window.setCustomAnchorSource?.('existing');
+    // 预览 Prompt 区块仅对锚点流程有意义（custom 直接用面板内 Prompt，不叠加自动生成）
+    const previewWrap = $('#prompt-preview-wrap');
+    if (previewWrap) previewWrap.hidden = true;
+    const previewBtn = $('#preview-prompt-btn');
+    if (previewBtn) previewBtn.style.display = 'none';
+    return;
+  }
+  // 非 custom：恢复素材面板各小节默认可见
+  const anchorSection = $('#anchor-section');
+  if (anchorSection) anchorSection.style.display = '';
+  const lyricsWrap = $('#lyrics-wrap');
+  if (lyricsWrap) lyricsWrap.style.display = '';
+  const constraintsWrap = $('#constraints-wrap');
+  if (constraintsWrap) constraintsWrap.style.display = '';
+  const refAvCommon = $('#ref-av-common');
+  if (refAvCommon) refAvCommon.style.display = '';
+  const refRoles = $('#reference-roles-wrap');
+  if (refRoles) refRoles.hidden = true;
+  const customRefsLabel = $('#custom-refs-label');
+  if (customRefsLabel) customRefsLabel.style.display = 'none';
+  const customRefsRoles = $('#custom-refs-roles-wrap');
+  if (customRefsRoles) customRefsRoles.hidden = true;
+  // 切换模式后保持预览区块收起，避免一上来就展开空白框；用户点「预览 Prompt」再填充
+  const previewWrap = $('#prompt-preview-wrap');
+  if (previewWrap) previewWrap.hidden = true;
+  const previewBtn = $('#preview-prompt-btn');
+  if (previewBtn) previewBtn.style.display = '';
+  $('#lyrics-wrap').style.display = mode === 'motion' ? 'none' : '';
   // "传参考音频"的显示由当前 ref-tab 决定（switchRefTab），这里只处理 motion 强制不传
   const cb = $('#pass-reference-audio');
   const wrap = $('#pass-audio-wrap');
@@ -1076,7 +1600,7 @@ export async function saveTask(event, mode = 'auto') {
   try {
     data = formTask();
   } catch (e) {
-    toast(e.message);
+    showErrorModal('无法保存任务', e.message);
     return null;
   }
   const newId = `${data.data_dir}__${data.name}`;
@@ -1193,15 +1717,29 @@ const PAD_MODE_NAMES = { none: '原始时长', back: '后补齐', front: '前补
 function _taskConfigChips(t) {
   const chips = [];
   chips.push(`<span class="cfg-chip cfg-mode">${modeName(t.mode)}</span>`);
+  if (t.mode === 'custom') {
+    chips.push(`<span class="cfg-chip">⏱ ${t.duration || 5}s</span>`);
+    const anchorN = (t.anchors || []).length;
+    if (anchorN) chips.push(`<span class="cfg-chip">🖼 参考图 ×${anchorN}</span>`);
+    // 参考视频/音频分别计数显示（与 anchor 逻辑一致：明确数量，便于一眼看出组合）
+    const videoN = (t.references || []).filter((r) => r.pass_reference_video !== false).length;
+    const audioN = (t.references || []).filter((r) => r.pass_reference_audio !== false).length;
+    if (videoN) chips.push(`<span class="cfg-chip">🎬 参考视频 ×${videoN}</span>`);
+    if (audioN) chips.push(`<span class="cfg-chip">🎵 参考音频 ×${audioN}</span>`);
+    chips.push(`<span class="cfg-chip">${t.candidates} 候选</span>`);
+    return chips.join('');
+  }
   // 时长对齐（取第一个 reference 的 pad_mode，旧数据缺省 back）
   const pad = t.references?.[0]?.pad_mode || 'back';
   chips.push(`<span class="cfg-chip">⏱ ${PAD_MODE_NAMES[pad] || pad}</span>`);
-  // 音视频传入
-  const hasVideo = t.references?.some((r) => r.pass_reference_video !== false);
-  const hasAudio = t.references?.some((r) => r.pass_reference_audio !== false);
-  if (hasVideo && hasAudio) chips.push(`<span class="cfg-chip">🎬 视频+音频</span>`);
-  else if (hasVideo) chips.push(`<span class="cfg-chip">🎬 仅视频</span>`);
-  else if (hasAudio) chips.push(`<span class="cfg-chip">🎵 仅音频</span>`);
+  // 主体 Anchor 图（多图即多任务的组合，明确数量，和参考视频/音频同一逻辑）
+  const anchorN = (t.anchors || []).length;
+  if (anchorN) chips.push(`<span class="cfg-chip">🖼 Anchor ×${anchorN}</span>`);
+  // 音视频传入：视频/音频分别计数显示数量（与 anchor 逻辑一致，明确组合）
+  const videoN = (t.references || []).filter((r) => r.pass_reference_video !== false).length;
+  const audioN = (t.references || []).filter((r) => r.pass_reference_audio !== false).length;
+  if (videoN) chips.push(`<span class="cfg-chip">🎬 参考视频 ×${videoN}</span>`);
+  if (audioN) chips.push(`<span class="cfg-chip">🎵 参考音频 ×${audioN}</span>`);
   // 歌词时间戳（打了几个有效时间点）
   const timedCount = (t.lyrics_timestamps || []).filter((x) => x?.time != null).length;
   if (timedCount > 0) chips.push(`<span class="cfg-chip cfg-ts">🎤 时间戳 ${timedCount} 句</span>`);
@@ -1280,15 +1818,21 @@ function _renderTaskList() {
 
   const card = (t) => {
     // 缺 Anchor 或参考音视频的任务不能直接运行（与表单「启动生成」的前置校验一致）
+    // 自由定制（custom）只需 prompt，不做素材校验
     const missing = [];
-    if (!(t.anchors || []).length) missing.push('Anchor 图片');
-    if (!(t.references || []).length) missing.push('参考音视频');
+    if (t.mode !== 'custom') {
+      if (!(t.anchors || []).length) missing.push('Anchor 图片');
+      if (!(t.references || []).length) missing.push('参考音视频');
+    }
     const runDisabled = missing.length ? ' disabled' : '';
     const runTitle = missing.length ? ` title="缺少${missing.join('、')}，请先编辑补全"` : '';
+    const metaLine = t.mode === 'custom'
+      ? `自由定制 · ${escapeHtml(t.id)}`
+      : `${(t.anchors || []).length} anchors · ${escapeHtml(t.id)}`;
     return `<article class="task" data-id="${escapeHtml(t.id)}">
       <div class="task-info">
         <h3>${escapeHtml(t.name || t.id)}</h3>
-        <div class="meta">${(t.anchors || []).length} anchors · ${escapeHtml(t.id)}</div>
+        <div class="meta">${metaLine}</div>
         <div class="cfg-chips">${_taskConfigChips(t)}</div>
       </div>
       <div class="actions">
@@ -1351,13 +1895,38 @@ export function editTask(id) {
     }
   }
   $('#task-dir').value = dir;
+  // 回填后立即刷新素材区提示，避免 `#need-dir-tip` 停留在「请先选择任务文件夹」误报
+  checkTaskFolderEmpty();
   // 规范化路径：去掉可能存在的 data_dir 前缀（历史脏数据），保证相对 task_dir
   const stripDirPrefix = (file) => {
     const prefix = dir.replace(/\/+$/, '') + '/';
     return file && file.startsWith(prefix) ? file.slice(prefix.length) : file;
   };
   $('#candidates').value = t.candidates;
-  $('#anchors').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
+  // 自由定制：参考图回填到 custom-anchor，参考音视频从 custom_refs 重建（含类型与角色标签）
+  if (t.mode === 'custom') {
+    $('#custom-anchor').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
+    // 重建 store.customReferences（含参考图作用域）：从回填字段 anchors[].role 还原
+    store.customReferences = t.anchors.map((x) => ({
+      file: stripDirPrefix(x.file),
+      role: x.role || '',
+    }));
+    if ($('#custom-prompt')) $('#custom-prompt').value = t.custom_prompt || '';
+    if ($('#custom-duration')) $('#custom-duration').value = String(t.duration || 5);
+    // 重建 store.customRefs：优先用前端回填字段 custom_refs（含 kind/role），否则从 references 推断类型
+    store.customRefs = (t.custom_refs && t.custom_refs.length)
+      ? t.custom_refs.map((r) => ({ file: stripDirPrefix(r.file), kind: r.kind, role: r.role || '' }))
+      : (t.references || []).map((r) => ({
+          file: stripDirPrefix(r.file),
+          kind: r.pass_reference_video ? 'video' : 'audio',
+          role: '',
+        }));
+    if ($('#custom-refs-roles')) $('#custom-refs-roles').value = '';
+    $('#anchors').value = '';
+  } else {
+    $('#custom-anchor').value = '';
+    $('#anchors').value = t.anchors.map((x) => stripDirPrefix(x.file)).join('\n');
+  }
   // 参考音视频：纯音频任务（pass_reference_video=false）写入音频字段，否则写入视频字段
   // 视频任务若有独立音频（audio_file，对口型源），回填到音频字段，编辑时可见、可改
   const isAudioOnly = t.references?.length > 0 && t.references.every(r => r.pass_reference_video === false);
@@ -1465,8 +2034,10 @@ export function resetForm() {
   $('#task-form').reset();
   // 显式清空素材字段（form.reset 对 hidden input 的清空在部分场景下不可靠）
   $('#anchors').value = '';
+  $('#custom-anchor').value = '';
   $('#references').value = '';
   $('#audio-refs').value = '';
+  if ($('#custom-prompt')) $('#custom-prompt').value = '';
   store.currentTask = null;
   store.pendingLyricsTimestamps = null;
   store.originalPadMode = null;
@@ -1633,7 +2204,7 @@ export async function previewPrompt() {
     if (wrap) wrap.hidden = false;
     else if (ta) ta.hidden = false;
   } catch (e) {
-    toast(e.message);
+    showErrorModal('无法预览 Prompt', e.message);
   }
 }
 
@@ -1676,10 +2247,12 @@ export function requestStart(id) {
 export async function startCurrent() {
   try {
     const data = formTask();
-    // 提交前校验：anchor 与参考音视频必填
-    if (!data.anchors.length) throw new Error('请先选择或生成 Anchor 图片');
-    if (!data.references.length) throw new Error('请先上传参考音视频');
-    _validateLyricsForMode(data);
+    // 提交前校验：自由定制只需 prompt（formTask 已保证非空），其余模式需锚点 + 参考音视频
+    if (data.mode !== 'custom') {
+      if (!data.anchors.length) throw new Error('请先选择或生成 Anchor 图片');
+      if (!data.references.length) throw new Error('请先上传参考音视频');
+      _validateLyricsForMode(data);
+    }
     const newId = `${data.data_dir}__${data.name}`;
     const editingId = store.currentTask?.id;
     if (editingId && editingId !== newId) {
@@ -1692,7 +2265,7 @@ export async function startCurrent() {
     const task = await saveTask(null, 'auto');
     requestStart(task.id);
   } catch (e) {
-    toast(e.message);
+    showErrorModal('无法启动生成', e.message);
   }
 }
 
@@ -1716,6 +2289,7 @@ export async function confirmStart() {
       const { loadAnchorRuns, openAnchorPoll } = await import('./anchor.js');
       await loadAnchorRuns();
       openAnchorPoll();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
     const job = await post('/api/runs', {
@@ -1728,6 +2302,7 @@ export async function confirmStart() {
     showView('runs');
     await loadRuns();
     openRunPoll();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (e) {
     toast(e.message);
   }

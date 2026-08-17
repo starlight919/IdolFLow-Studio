@@ -62,7 +62,7 @@ class JobManager:
         job = {
             "run_id": run_id, "task_id": task_id, "task_name": task["name"],
             "stage": "queued", "message": "等待运行", "status": "queued",
-            "completed": 0, "total": len(task["anchors"]) * len(task["references"]) * (candidates or task["candidates"]),
+            "completed": 0, "total": (candidates or task["candidates"]) if task.get("mode") == "custom" else len(task["anchors"]) * len(task["references"]) * (candidates or task["candidates"]),
             "stage_completed": 0, "stage_total": 0,
             "created_at": datetime.now().isoformat(timespec="seconds"), "error": "",
         }
@@ -246,6 +246,7 @@ class JobManager:
                 message="全部候选已完成" if state.data["status"] == "done" else "部分候选失败",
                 manifest=str(runner.adapter.output_dir / run_id / "review_manifest.json"),
                 completed=self.jobs[run_id]["total"], total=self.jobs[run_id]["total"],
+                error="",
             )
         except Exception as exc:
             self._update(run_id, status="failed", stage="failed", message="恢复运行失败", error=str(exc))

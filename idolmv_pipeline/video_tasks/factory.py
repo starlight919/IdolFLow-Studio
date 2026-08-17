@@ -70,7 +70,7 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
     publish_prefix = raw_prefix if raw_prefix.startswith(f"{dir_key}__") else f"{dir_key}__{raw_prefix}"
     return VideoTaskAdapter(
         name=task["id"],
-        kind="dance" if mode == "motion" else "singing",
+        kind={"motion": "dance", "custom": "custom"}.get(mode, "singing"),
         mode=mode,
         anchors=tuple(AnchorSpec(item["key"], item["file"], item.get("label", item["key"])) for item in task["anchors"]),
         references=tuple(ReferenceSpec(
@@ -101,7 +101,7 @@ def adapter_from_task(task: dict, config: VideoWorkspaceConfig, store: TaskStore
         watermark=task.get("watermark", False),
         output_format=task.get("output_format", "mp4"),
         custom_prompt=task.get("custom_prompt") or None,
-        metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {}), "legacy_work_dir": str(config.work_root / dir_key)},
+        metadata={"lyrics_text": lyrics, "anchor_asset_keys": task.get("anchor_asset_keys", {}), "legacy_work_dir": str(config.work_root / dir_key), "custom_duration": task.get("duration")},
     )
 
 

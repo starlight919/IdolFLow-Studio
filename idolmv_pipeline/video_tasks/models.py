@@ -7,8 +7,8 @@ from typing import Literal
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_ROOT = PROJECT_ROOT / "data"
 
-TaskKind = Literal["singing", "dance"]
-TaskMode = Literal["lip_sync", "dance_lip_sync", "motion"]
+TaskKind = Literal["singing", "dance", "custom"]
+TaskMode = Literal["lip_sync", "dance_lip_sync", "motion", "custom"]
 SplitMode = Literal["single", "fixed", "low_energy"]
 ContinuationMode = Literal["none", "last_frame", "anchor_and_last_frame"]
 CameraPolicy = Literal["locked", "keep_image", "follow_video"]

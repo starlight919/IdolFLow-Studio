@@ -24,6 +24,42 @@ export function toast(text) {
 }
 
 /**
+ * 居中弹窗提示（用于表单校验等必须被用户看到的错误）。
+ * 复用通用 #modal：填充标题/正文，隐藏密码输入行，仅保留「知道了」按钮。
+ * 与提交密码弹窗（requestStart）共用 #modal，但本函数不依赖 submit-password。
+ */
+export function showErrorModal(title, message) {
+  const modal = $('#modal');
+  if (!modal) return;
+  const titleEl = $('#modal-title');
+  const bodyEl = $('#modal-body');
+  const pwRow = $('#modal-pw-row');
+  const actions = $('#modal-actions');
+  if (titleEl) titleEl.textContent = title || '提示';
+  if (bodyEl) bodyEl.textContent = message || '';
+  if (pwRow) pwRow.hidden = true;
+  if (actions) {
+    actions.innerHTML = '<button class="primary" onclick="closeErrorModal()">知道了</button>';
+  }
+  modal.hidden = false;
+}
+
+// 供内联 onclick 调用
+window.closeErrorModal = function closeErrorModal() {
+  const modal = $('#modal');
+  const pwRow = $('#modal-pw-row');
+  const actions = $('#modal-actions');
+  if (modal) modal.hidden = true;
+  // 还原为默认的提交密码弹窗结构，避免影响后续 requestStart 使用
+  if (pwRow) pwRow.hidden = false;
+  if (actions) {
+    actions.innerHTML =
+      '<button class="secondary" onclick="closeModal()">取消</button>' +
+      '<button onclick="confirmStart()">启动</button>';
+  }
+};
+
+/**
  * Promise-based delay
  */
 export function delay(ms) {
@@ -77,7 +113,7 @@ export function lines(id) {
 /**
  * Human-readable mode name
  */
-const MODE_NAMES = { lip_sync: '对口型', dance_lip_sync: '口型 + 动作', motion: '模仿动作' };
+const MODE_NAMES = { lip_sync: '对口型', dance_lip_sync: '口型 + 动作', motion: '模仿动作', custom: '自由定制' };
 export function modeName(v) {
   return MODE_NAMES[v] || v;
 }

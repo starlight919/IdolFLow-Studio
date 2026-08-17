@@ -94,7 +94,8 @@ def read_json(handler) -> dict:
 
 
 def serve_file(handler, path: Path, content_type: str | None = None,
-               download_name: str | None = None, root: Path | None = None) -> None:
+               download_name: str | None = None, root: Path | None = None,
+               inline: bool = False) -> None:
     resolved = path.resolve()
     if root is not None:
         root = root.resolve()
@@ -131,8 +132,9 @@ def serve_file(handler, path: Path, content_type: str | None = None,
     if status == 206:
         handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
     if download_name:
+        disposition = "inline" if inline else "attachment"
         handler.send_header("Content-Disposition",
-                            f"attachment; filename*=UTF-8''{quote(download_name)}")
+                            f"{disposition}; filename*=UTF-8''{quote(download_name)}")
     handler.end_headers()
     if handler.command == "HEAD":
         return
@@ -1003,14 +1005,22 @@ def _candidate_file(handler, run_id: str, candidate_id: str, download: bool) -> 
     source = Path(candidate.get("file", "")).resolve() if candidate.get("file") else (manifest_path.parents[2] / candidate["path"]).resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
-    # 下载文件名带上「数据目录__任务名」，方便区分不同目录下同名任务的候选
-    # manifest["task"] 即 adapter.name = store.get 返回的 composite id（如「曾曾__跳舞」），已含数据目录
+    # 下载文件名带上「数据目录__任务名」+ run_id，方便区分不同目录下同名任务的候选。
+    # 同一任务（如 街道风__57）可能跑了多次产生多个 run，不同 run 的同 candidate 会重名，
+    # 故把 run_id 也拼进文件名，避免用户下载到同一文件夹时互相覆盖。
     filename = "_".join((
-        safe_filename(manifest.get("task", "")), safe_filename(candidate["anchor"]),
-        safe_filename(candidate["reference"]), safe_filename(candidate["variant"]),
+        safe_filename(manifest.get("task", "")), safe_filename(run_id),
+        safe_filename(candidate["anchor"]), safe_filename(candidate["reference"]),
+        safe_filename(candidate["variant"]),
         f"candidate-{int(candidate['candidate']):02d}.mp4",
     ))
-    serve_file(handler, source, "video/mp4", filename if download else None)
+    # 下载（download）用 attachment 强制下载；审核页内联播放（media）用 inline，
+    # 既保证视频正常播放，又让浏览器右键「存储视频」拿到带 run_id 的有意义文件名，
+    # 避免同一任务多次 run 的同候选下载到本地后重名覆盖。
+    if download:
+        serve_file(handler, source, "video/mp4", filename)
+    else:
+        serve_file(handler, source, "video/mp4", filename, inline=True)
 
 
 def _start_publish(handler, run_id: str, manifest_path: Path, manifest: dict, candidate_id: str) -> None:

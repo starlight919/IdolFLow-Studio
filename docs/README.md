@@ -17,7 +17,8 @@ docs/
 │   ├── Video_Task_Workflow.md       # 视频任务完整工作流
 │   ├── Dance_Pipeline.md            # 舞蹈视频生成流程
 │   ├── Singing_Video_Guide.md       # 演唱视频制作指南
-│   ├── Prompt_Design.md             # Seedance Prompt 设计文档
+│   ├── Prompt_Design.md             # Seedance Prompt 设计文档（七层架构）
+│   ├── Seedance_Prompt_Templates.md  # Seedance Prompt 模板库（清单/最佳实践/维护）
 │   ├── VIDEO_LOCATIONS.md           # 视频输出位置与管理
 │   ├── ANCHOR_REFERENCE_MAPPING.md  # Anchor 参考图映射设计
 │   ├── Asset_Design.md              # Seedance 素材 Asset 缓存/复用设计（key 按任务隔离 + 台账）
@@ -37,6 +38,7 @@ docs/
 | 日常命令速查 | [QUICK_REFERENCE.md](QUICK_REFERENCE.md) |
 | 脚本说明 | [SCRIPTS.md](SCRIPTS.md) |
 | Prompt 优化 | [guides/Prompt_Design.md](guides/Prompt_Design.md) |
+| Prompt 模板库 | [guides/Seedance_Prompt_Templates.md](guides/Seedance_Prompt_Templates.md) |
 | 排查问题 | 查看 `workspace.log` + Web 界面运行记录 |
 
 ## 📖 文档分类
@@ -46,6 +48,7 @@ docs/
 - **[Dance_Pipeline.md](guides/Dance_Pipeline.md)** — 舞蹈视频生成专项指南
 - **[Singing_Video_Guide.md](guides/Singing_Video_Guide.md)** — 演唱视频制作指南
 - **[Prompt_Design.md](guides/Prompt_Design.md)** — Seedance Prompt 七层语义架构设计文档
+- **[Seedance_Prompt_Templates.md](guides/Seedance_Prompt_Templates.md)** — Seedance Prompt 模板库：外部最佳实践 + 项目内置模板清单 + 维护流程
 - **[VIDEO_LOCATIONS.md](guides/VIDEO_LOCATIONS.md)** — 视频输出位置、目录结构、磁盘管理
 - **[ANCHOR_REFERENCE_MAPPING.md](guides/ANCHOR_REFERENCE_MAPPING.md)** — Anchor 参考图映射机制
 - **[Asset_Design.md](guides/Asset_Design.md)** — Seedance 素材 Asset 缓存/复用设计（任务隔离 key、跨文件夹复制复用、append-only 台账与运行快照）
