@@ -501,3 +501,60 @@ html[data-theme="dark"] .cfg-chip{background:rgba(255,255,255,.05)}
 html[data-theme="dark"] .group-count,html[data-theme="dark"] .run-dir{color:#b8b8bd;background:rgba(255,255,255,.08)}
 html[data-theme="dark"] .file-option .file-thumb,html[data-theme="dark"] .reference-thumb{background:#2b2b30}
 html[data-theme="dark"] .anchor-review-card{border-color:#3a3a3e}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Type scale — 统一字体层级（修正大小颠倒 / 半像素归整）
+   展示标题 34 → 章节标题 22 → 卡片标题 15 → 正文 14 → 辅助 12 → 角标 11
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 章节标题统一为 22px（原 25px 与 h1 34px 落差过大，且与卡片标题层级模糊） */
+.section-head h2{font-size:22px}
+
+/* 卡片 / 面板 / 弹窗标题统一 15px，与正文 14px 拉开层级 */
+.panel h3,.task h3,.run-card h3,.modal-card h3{font-size:15px;font-weight:600}
+
+/* 模式卡片：名称加粗放大、说明弱化为 12px（原来两者同 14px 不分主次） */
+.mode strong{font-size:14px;font-weight:600;color:var(--text)}
+.mode span{font-size:12px;color:var(--muted)}
+
+/* 徽标 / 辅助说明 / 元信息统一 12px（badge 原继承 14px 比 meta 还大） */
+.badge,.meta,.hint,.section-head p{font-size:12px}
+
+/* 半像素归整：12.5px → 12px，13.5px → 13px */
+.cascade-summary,.asset-empty-tip,.picker-hint,.picker-upload-tips,.asset-hint{font-size:12px}
+.task-group-head{font-size:13px}
+
+/* 表单 label 字段标题：比正文紧凑半号，与输入内容拉开主次 */
+label{font-size:13px}
+.field-group .field-label{font-size:12px}
+
+/* 弹窗正文与输入一致，避免弹窗内文字层级跳动 */
+.modal-card{font-size:14px}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Visual polish — 视觉精修（对比度 / 行高 / 浮起感 / 字重）
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 顶栏 tab：active 与未激活拉开对比，hover 平滑过渡 */
+nav button{font-size:13px;font-weight:500;border-radius:10px;transition:color .18s ease,background .18s ease,transform .18s ease}
+nav button:hover:not(.active){color:var(--text);background:rgba(127,127,127,.08)}
+nav button.active{font-weight:600}
+html[data-theme="dark"] nav button.active{background:#f5f5f7;color:#111;box-shadow:0 1px 8px rgba(0,0,0,.35)}
+
+/* 正文与标题行高/字距，提升阅读质感 */
+body{line-height:1.5}
+h1{letter-spacing:-.5px}
+h2,.section-head h2{letter-spacing:-.3px}
+
+/* 卡片 hover 浮起感更柔和统一（原 filter 缩放偏生硬） */
+.task,.run-card,.panel,.anchor-review-card{transition:box-shadow .2s ease,transform .2s ease,border-color .2s ease}
+.task:hover,.run-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.06)}
+html[data-theme="dark"] .task:hover,html[data-theme="dark"] .run-card:hover{box-shadow:0 6px 20px rgba(0,0,0,.4)}
+
+/* 字段标题字重统一，与输入内容拉开主次 */
+label,.label-text{font-weight:500}
+
+/* 主按钮字重一致，观感更精致 */
+button.secondary{font-weight:500}
+
+
