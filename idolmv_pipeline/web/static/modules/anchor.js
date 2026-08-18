@@ -76,7 +76,13 @@ function anchorTaskForm() {
   });
 
   const description = buildPresetText('#anchor-description', 'quality');
-  const negative = buildPresetText('#anchor-negative', 'negative');
+  let negative = buildPresetText('#anchor-negative', 'negative');
+  // 防脏画面：勾选后追加后端 anti_dirty 预设全文到禁止项
+  const antiDirty = $('#anti-dirty');
+  const antiDirtyPrompt = store.negativePresets?.anti_dirty;
+  if (antiDirty && antiDirty.checked && antiDirtyPrompt && !negative.includes(antiDirtyPrompt)) {
+    negative = negative ? `${negative}；${antiDirtyPrompt}` : antiDirtyPrompt;
+  }
 
   return {
     id: $('#anchor-id').value.trim(),
@@ -724,6 +730,10 @@ export function editAnchorTask(id) {
   $('#anchor-negative').value = t.negative || '';
   // Restore quality/negative preset tag selections
   setTimeout(() => restorePresetSelections(t.description || '', t.negative || ''), 50);
+  // 回填「防脏画面」勾选状态
+  const antiDirtyPrompt = store.negativePresets?.anti_dirty;
+  const antiDirtyEl = $('#anti-dirty');
+  if (antiDirtyEl) antiDirtyEl.checked = !!(antiDirtyPrompt && t.negative && t.negative.includes(antiDirtyPrompt));
 
   // First set references so renderAnchorAspects() can populate dropdowns
   store.anchorReferences = t.references.map((x) => ({
@@ -1436,13 +1446,13 @@ export function renderAnchorQualityPresets() {
 
 /** Render negative preset tags */
 export function renderAnchorNegativePresets() {
-  renderPresetTags('anchor-negative-presets', store.negativePresets || {}, 'negative');
+  renderPresetTags('anchor-negative-presets', store.negativePresets || {}, 'negative', ['anti_dirty']);
 }
 
-function renderPresetTags(containerId, presets, presetType) {
+function renderPresetTags(containerId, presets, presetType, exclude = []) {
   const container = $(`#${containerId}`);
   if (!container) return;
-  const entries = Object.entries(presets);
+  const entries = Object.entries(presets).filter(([key]) => !exclude.includes(key));
   if (!entries.length) {
     container.innerHTML = '<span class="muted">暂无预设</span>';
     return;

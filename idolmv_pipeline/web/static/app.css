@@ -284,6 +284,10 @@ html[data-theme="dark"] .empty-folder-tip code{background:rgba(255,255,255,.12)}
 .preset-tag:hover{border-color:var(--accent);background:rgba(108,92,231,.04)}
 .preset-tag.selected{border-color:var(--accent);background:rgba(108,92,231,.12);color:#6c5ce7;font-weight:500}
 .preset-tag .tag-count{font-size:10px;color:var(--muted);opacity:.7}
+.anti-dirty-box{display:flex;flex-direction:column;gap:4px;margin-top:10px;padding:10px 12px;background:rgba(108,92,231,.05);border:1px dashed var(--line);border-radius:10px}
+.anti-dirty-box .ref-aspect-check{background:transparent;border:none;padding:0}
+.anti-dirty-box .ref-aspect-check:has(input:checked){background:transparent}
+.anti-dirty-hint{font-size:11px;color:var(--muted);line-height:1.5}
 
 /* ── Folder new input row ── */
 .folder-new{display:flex;gap:8px;margin-bottom:10px}

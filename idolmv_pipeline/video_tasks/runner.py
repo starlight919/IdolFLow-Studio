@@ -290,6 +290,7 @@ class VideoTaskRunner:
                 seg_signature = _artifact_signature(seg_fp, seg_transform)
                 cached_seg_sig = self._read_signature_any(reference, f"segment_{index:02d}.src.json")
                 if not segment_cur.exists() or cached_seg_sig != seg_signature:
+                    segment.parent.mkdir(parents=True, exist_ok=True)
                     trim_reference(seg_source, segment, start, duration, reference.crop_filter, pad_mode=seg_pad_mode, original_duration=original_total)
                     _write_marker(seg_marker, seg_signature, seg_fp, seg_transform)
                     segment_cur = segment
