@@ -33,20 +33,45 @@ _SEP = "\n\n"
 # Layer 1 — Task Contract
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_TASK: dict[TaskMode, str] = {
-    "lip_sync": (
+def _build_task(mode: TaskMode, has_audio: bool, has_video: bool) -> str:
+    """Layer 1 — 任务目标。按实际可用参考动态生成，避免纯音频模式误提「参考视频」。"""
+    if mode == "lip_sync":
+        if has_video and has_audio:
+            ref_desc = "参考视频、参考音频和给定歌词"
+        elif has_video:
+            ref_desc = "参考视频和给定歌词"
+        elif has_audio:
+            ref_desc = "参考音频和给定歌词"
+        else:
+            ref_desc = "给定歌词"
+        return (
+            f"让图片1中的人物在保持原人物、场景和构图的情况下，"
+            f"按照{ref_desc}完成自然准确的演唱/说话口型。"
+        )
+    if mode == "motion":
+        return (
+            "让图片1中的人物完整模仿视频1中的身体动作，"
+            "同时保持图片1中的人物身份、服装、场景和整体视觉效果。"
+        )
+    # dance_lip_sync
+    if has_video and has_audio:
+        return (
+            "让图片1中的人物完整模仿视频1中的身体动作，"
+            "同时结合参考视频、参考音频和歌词完成准确对口型。"
+        )
+    if has_video:
+        return (
+            "让图片1中的人物完整模仿视频1中的身体动作，"
+            "同时结合参考视频和歌词完成准确对口型。"
+        )
+    if has_audio:
+        ref_desc = "参考音频和歌词"
+    else:
+        ref_desc = "歌词"
+    return (
         "让图片1中的人物在保持原人物、场景和构图的情况下，"
-        "按照参考视频、参考音频和给定歌词完成自然准确的演唱/说话口型。"
-    ),
-    "motion": (
-        "让图片1中的人物完整模仿视频1中的身体动作，"
-        "同时保持图片1中的人物身份、服装、场景和整体视觉效果。"
-    ),
-    "dance_lip_sync": (
-        "让图片1中的人物完整模仿视频1中的身体动作，"
-        "同时结合参考视频、参考音频和歌词完成准确对口型。"
-    ),
-}
+        f"结合{ref_desc}完成准确对口型。"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -54,26 +79,37 @@ _TASK: dict[TaskMode, str] = {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _build_ref_map(mode: TaskMode, has_audio: bool, has_video: bool = True) -> str:
-    lines = ["参考分工："]
+    """明确各参考素材的职责边界与冲突裁决（社区 R2V 最佳实践）。
+
+    依据：Seedance 2.5 R2V 指南 / heymarmot 指南——
+    每份参考「单一职责」，并在 Prompt 中用 @引用 显式声明其职责边界。
+    - @image1：锁身份 / 服装 / 场景（图管"长什么样"）
+    - @video1：借动作 / 运镜 / 口型时间（视频管"怎么动"，不复制其画面元素）
+    - @audio1：借发音 / 节奏（音频管"什么节奏"）
+    """
+    # 不再加"参考说明（…）"引导句：那是元说明噪声，正式 Prompt 直接以 @引用 职责句开头
+    lines: list[str] = []
 
     if mode == "lip_sync":
-        lines.append("- 图片1：负责人物身份、脸部、肤色、发型、服装、体型、场景、构图和光线。")
+        lines.append("@image1 锁定人物身份、脸部、肤色、发型、服装、体型、场景、构图和光线，全程保持一致。")
         if has_video:
-            lines.append("- 视频1：负责参考嘴形、嘴部开合、唇形变化以及对应的视觉口型时间。")
+            lines.append("@video1 仅提供视觉口型参考：嘴形、嘴部开合、唇形变化与对应口型时间；不替换人物外观。")
         if has_audio:
-            lines.append("- 参考音频：负责实际发音、音节、节奏、持续时间、发音起止和停顿。")
-        lines.append("- 歌词：负责准确的字词、音节内容和发音顺序。")
+            lines.append("@audio1 提供实际发音、音节、节奏、持续时间、发音起止和停顿。")
+        lines.append("歌词提供准确的字词、音节内容与发音顺序。")
+        lines.append("外观与身份以 @image1 为准；口型同时满足歌词内容、发音时间与对应时间点正确的视觉嘴形。")
 
     elif mode == "motion":
-        lines.append("- 图片1：负责人物身份、脸部、发型、服装、体型、场景、构图和光线。")
-        lines.append("- 视频1：仅负责身体动作、姿态变化、动作顺序、运动轨迹、动作幅度和节奏。")
+        lines.append("@image1 锁定人物身份、脸部、发型、服装、体型、场景、构图和光线。")
+        lines.append("@video1 仅提供身体动作参考：姿态变化、动作顺序、运动轨迹、动作幅度与节奏；不复制其画面元素。")
 
     elif mode == "dance_lip_sync":
-        lines.append("- 图片1：负责人物身份、脸部、发型、服装、体型、场景、构图和光线。")
-        lines.append("- 视频1：负责身体动作，同时提供视觉嘴形与口型时间参考。")
+        lines.append("@image1 锁定人物身份、脸部、发型、服装、体型、场景、构图和光线。")
+        lines.append("@video1 提供身体动作参考，并作为视觉口型时间参考；不替换人物外观。")
         if has_audio:
-            lines.append("- 参考音频：负责实际发音、节奏、音节持续时间、起止和停顿。")
-        lines.append("- 歌词：负责准确的演唱/说话内容和发音顺序。")
+            lines.append("@audio1 提供实际发音、节奏、音节持续时间、起止和停顿。")
+        lines.append("歌词提供准确的演唱 / 说话内容与发音顺序。")
+        lines.append("外观与身份以 @image1 为准；身体动作与口型在同一时间轴中互不干扰。")
 
     return "\n".join(lines)
 
@@ -170,6 +206,9 @@ _PRESERVATION = (
     "始终保持图片1中的同一人物。"
     "全程保持人物脸型、五官、肤色、发型、发色、服装、体型和身体比例稳定。"
     "保持图片1中的原始场景、主要背景元素、光线和视觉风格。"
+)
+
+_PRESERVATION_VIDEO_GUARD = (
     "参考视频中的人物身份、服装和场景不得替换图片1中的对应内容。"
 )
 
@@ -179,8 +218,10 @@ _PRESERVATION_MOTION_EXTRA = (
 )
 
 
-def _build_preservation(mode: TaskMode) -> str:
+def _build_preservation(mode: TaskMode, has_video_ref: bool = True) -> str:
     parts = [_PRESERVATION]
+    if has_video_ref:
+        parts.append(_PRESERVATION_VIDEO_GUARD)
     if mode in ("motion", "dance_lip_sync"):
         parts.append(_PRESERVATION_MOTION_EXTRA)
     return "\n".join(parts)
@@ -244,7 +285,7 @@ def _has_lyrics_timestamps(lyrics_timestamps) -> bool:
     )
 
 
-def _build_timestamped_lyrics(lyrics: str, lyrics_timestamps, timestamp_offset: float = 0.0) -> str:
+def _build_timestamped_lyrics(lyrics: str, lyrics_timestamps, timestamp_offset: float = 0.0, has_video_ref: bool = True) -> str:
     """带人工时间点的歌词渲染。
 
     设计见 docs/guides/Prompt_Design.md §12.2：
@@ -282,11 +323,11 @@ def _build_timestamped_lyrics(lyrics: str, lyrics_timestamps, timestamp_offset: 
                     f'{_ts(item):.2f}s开始唱“{str(item["text"]).strip()}”；'
                     for item in timed
                 ),
-                "其余歌词按原顺序结合参考音频和视频自然衔接。",
+                "其余歌词按原顺序结合参考音频{}自然衔接。".format("和视频" if has_video_ref else ""),
             ]
 
     lines += [
-        "保持整体演唱节奏、停顿和嘴部动作与参考音频、视频一致。",
+        "保持整体演唱节奏、停顿和嘴部动作与参考音频{}一致。".format("、视频" if has_video_ref else ""),
         "唱完后自然收尾。",
     ]
     return "\n".join(lines)
@@ -333,7 +374,7 @@ def build_prompt(
     parts: list[str] = []
 
     # Layer 1 — Task
-    parts.append(_TASK[mode])
+    parts.append(_build_task(mode, has_audio_ref, has_video_ref))
 
     # Layer 2 — Reference Map
     parts.append(_build_ref_map(mode, has_audio_ref, has_video_ref))
@@ -349,7 +390,7 @@ def build_prompt(
         parts.append(_MOTION_LIP_ALIGNMENT)
 
     # Layer 4 — Preservation
-    parts.append(_build_preservation(mode))
+    parts.append(_build_preservation(mode, has_video_ref))
 
     # Layer 5 — Camera
     parts.append(_CAMERA[camera])
@@ -360,7 +401,7 @@ def build_prompt(
     # Layer 7 — Lyrics & Custom
     if lyrics:
         if _has_lyrics_timestamps(lyrics_timestamps):
-            parts.append(_build_timestamped_lyrics(lyrics, lyrics_timestamps, timestamp_offset))
+            parts.append(_build_timestamped_lyrics(lyrics, lyrics_timestamps, timestamp_offset, has_video_ref))
         else:
             parts.append(_build_plain_lyrics(lyrics))
     if constraints:

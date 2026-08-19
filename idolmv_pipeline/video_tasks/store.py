@@ -208,8 +208,9 @@ class TaskStore:
         # 自定义 prompt：整段由用户提供，无法程序校验，跳过 build_prompt
         elif strict and not custom_prompt:
             has_audio = any(ref.get("pass_reference_audio", True) for ref in task.get("references", []))
+            has_video = any(ref.get("asset_type") == "video" or ref.get("reference_type") == "video" for ref in task.get("references", []))
             camera_policy = task.get("camera_policy")
-            build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))
+            build_prompt(mode, lyrics, str(task.get("constraints", "")), has_audio_ref=has_audio, has_video_ref=has_video, camera_policy=camera_policy, lyrics_timestamps=task.get("lyrics_timestamps"))
 
         result = dict(task)
         result.update(

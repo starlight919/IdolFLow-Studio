@@ -277,7 +277,7 @@ Seedance 为原生音视频联合生成：参考音频可作输入条件之一�
 2. **与 §1.7.2 的 `@引用` 范式一致**：社区惯例就是在正文前先声明各参考职责，而非文末补注。
 3. **降低随机性**：参考分工是"约束条件"而非"描述内容"，约束前置可减少模型自由发挥的空间。
 
-> 注意：这是 custom 模式专属处理；后端自动生成模式（lip_sync/motion 等）走七层架构（参考分工在 `[参考分工]` 层，见 §3），不套用此"前置"规则——两者范式不同但理念一致（职责单一、冲突以主描述优先）。
+> 注意：这是 custom 模式专属处理；后端自动生成模式（lip_sync/motion 等）走七层架构，参考职责在 Layer 2 以 `@image1 / @video1 / @audio1` 显式声明（见 §3），不套用此"前置"规则——两者范式不同但理念一致（职责单一、显式声明边界）。
 
 ---
 
@@ -457,13 +457,33 @@ Seedance 为原生音视频联合生成：参考音频可作输入条件之一�
 
 ## 6. 参考来源
 
-- Seedance 2.5 提示词教程（运镜 / 多镜头 / 人物一致性 / 8 段结构），CSDN，2026-08-10，CC 4.0 BY-SA。
-- Seedance 2.0 Prompt Library（六维度结构 + 7 类常见风格模板），GitHub: gracech0322-cmd/seedance-2-prompt-library，2026-08-06（社区收集，教育用途）。
-- **Seedance 2.0 Prompting Guide（heymarmot.com，2026）**：R2V 参考分工 / 显式 `@引用` 职责分配 / 多参考必须声明优先级，以及"参考约束作为高级指令前置"的实战结论——是 §1.7.7 参考图作用域与 §1.7.8 参考说明前置两项设计的主要依据。
-- 火山引擎 Seedance 官方 R2V 指南（图 / 视频 / 音频分工与数量上限）、官方示例（电影感 / 商业广告），2026。
-- 腾讯云 Seedance 音频参考解析（节奏驱动 / 对口型局限），社区技术文。
-- 项目内部：`idolmv_pipeline/web/static/modules/task.js`（`CUSTOM_PROMPT_TEMPLATES`、`_fuseCustomRefs`、`CUSTOM_ANCHOR_ROLES`/`CUSTOM_REF_ROLES`）、`idolmv_pipeline/video_tasks/prompts.py`（七层架构、`_submit_custom`）。
-- 工程架构文档：`docs/guides/Prompt_Design.md`。
+> 所有外部结论均用于支撑 `Prompt_Design.md` 中的分层与措辞设计。任一措辞改动须能在这里找到依据，避免凭空改写。
+> 与 `Prompt_Design.md §20` 互为索引。
+
+### 6.1 外部来源（按主题）
+
+- **Seedance 2.5 提示词教程**（运镜 / 多镜头 / 人物一致性 / 8 段结构），CSDN，2026-08-10，CC 4.0 BY-SA。
+- **Seedance 2.0 Prompt Library**（六维度结构 + 7 类常见风格模板），GitHub: gracech0322-cmd/seedance-2-prompt-library，2026-08-06（社区收集，教育用途）。
+- **Seedance 2.0 Prompting Guide**（heymarmot.com，2026）：R2V 参考分工 / 显式 `@引用` 职责分配 / 多参考必须声明优先级，以及"参考约束作为高级指令前置"的实战结论——是 §1.7.7 参考图作用域、§1.7.8 参考说明前置两项设计的主要依据，**也是后端七层架构 Layer 2 改用 `@引用 + 正向职责 + 优先级裁决句`（不再保留"参考说明"引导标题）的直接依据**。
+- **火山引擎 Seedance 官方 R2V 指南**（图 / 视频 / 音频分工与数量上限）、官方示例（电影感 / 商业广告），2026。
+- **腾讯云 Seedance 音频参考解析**（节奏驱动 / 对口型局限），社区技术文——支撑"音频管节奏、视频管口型时间、歌词管字词"的三源分工。
+- **Seedance《AI 视频提示词指南》（2026）**：正向描述优先、运镜词汇表——支撑 Layer 3/5/6 的措辞风格。
+
+### 6.2 来源 → 设计决策对照（七层架构 Layer 2 专用）
+
+| 来源 | 支撑的设计决策 |
+| --- | --- |
+| heymarmot R2V 指南 | 每份参考"单一职责"并显式声明；冲突时以 Prompt 优先 |
+| 火山引擎 R2V 官方指南 + 腾讯云音频解析 | 图管外观 / 视频管动作运镜 / 音频管节奏的按域分工 |
+| Seedance 2.0 Prompting Guide（显式 `@引用`） | Layer 2 用 `@image1 / @video1 / @audio1` 而非"图片1负责…"的工程语言 |
+| Seedance《AI 视频提示词指南》（正向优先） | "负责"类措辞改为正向可执行约束（"锁定…/仅提供…/"） |
+| 上述"单一职责 + 显式声明"原则（直接推论） | 纯音频模式不列出视频行，Layer 1 任务句同步改写，不向模型描述不存在的素材 |
+
+### 6.3 项目内部来源
+
+- `idolmv_pipeline/web/static/modules/task.js`（`CUSTOM_PROMPT_TEMPLATES`、`_fuseCustomRefs`、`CUSTOM_ANCHOR_ROLES`/`CUSTOM_REF_ROLES`）
+- `idolmv_pipeline/video_tasks/prompts.py`（七层架构、`_build_ref_map`、`_build_task`、`_submit_custom`）
+- 工程架构文档：`docs/guides/Prompt_Design.md`
 
 ---
 
