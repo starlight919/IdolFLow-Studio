@@ -628,6 +628,26 @@ export function renderAspectSourceSummary() {
 
 // ── Anchor Task List ────────────────────────────────────────────────────────
 
+const ANCHOR_COLLAPSED_KEY = 'anchor-collapsed-folders';
+function _anchorCollapsed() {
+  if (!store.anchorCollapsed) {
+    try {
+      store.anchorCollapsed = new Set(JSON.parse(localStorage.getItem(ANCHOR_COLLAPSED_KEY) || '[]'));
+    } catch {
+      store.anchorCollapsed = new Set();
+    }
+  }
+  return store.anchorCollapsed;
+}
+
+function toggleAnchorTaskGroup(dir) {
+  const set = _anchorCollapsed();
+  if (set.has(dir)) set.delete(dir); else set.add(dir);
+  try { localStorage.setItem(ANCHOR_COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+  _renderAnchorTaskList();
+}
+window.toggleAnchorTaskGroup = toggleAnchorTaskGroup;
+
 export async function loadAnchorTasks() {
   store.anchorTasks = await api('/api/anchor-tasks');
   let orphaned = [];
@@ -672,30 +692,61 @@ function _renderAnchorTaskList() {
     }
   });
 
-  const html = all
-    .map(
-      (t) => {
-        if (t._orphan) {
-          return `<article class="task" data-id="${escapeHtml(t.id)}">
-            <div>
-              <h3>${escapeHtml(t.name)}</h3>
-              <div class="meta">配置已丢失 · ${t._refCount} 张参考图 · ${t._refFiles.map((f) => escapeHtml(f)).join(', ')}</div>
-            </div>
-            <div class="actions">
-              <button class="secondary" onclick="recoverAnchorTask('${escapeAttr(t.id)}')">恢复</button>
-            </div>
-          </article>`;
-        }
-        return `<article class="task" data-id="${escapeHtml(t.id)}">
-          <div><h3>${escapeHtml(t.name)}</h3><div class="meta">📁 ${escapeHtml(t.data_dir || t.id)} · GPT Image 2 · ${t.references.length} 张参考图 · ${t.candidates} 候选</div></div>
-          <div class="actions">
-            <button class="secondary" data-action="anchor-edit">编辑</button>
-            <button data-action="anchor-start">生成</button>
-            <button class="danger" data-action="anchor-delete" onclick="event.stopPropagation(); confirmDeleteAnchorTask('${escapeAttr(t.id)}')">删除</button>
-          </div>
-        </article>`;
-      }
-    )
+  // 单卡片渲染（与视频「已保存任务」同构）
+  const card = (t) => {
+    if (t._orphan) {
+      return `<article class="task" data-id="${escapeHtml(t.id)}">
+        <div class="task-info">
+          <h3>${escapeHtml(t.name)}</h3>
+          <div class="meta">配置已丢失 · ${t._refCount} 张参考图 · ${t._refFiles.map((f) => escapeHtml(f)).join(', ')}</div>
+        </div>
+        <div class="actions">
+          <button class="secondary" onclick="recoverAnchorTask('${escapeAttr(t.id)}')">恢复</button>
+        </div>
+      </article>`;
+    }
+    return `<article class="task" data-id="${escapeHtml(t.id)}">
+      <div class="task-info">
+        <h3>${escapeHtml(t.name)}</h3>
+        <div class="meta">${escapeHtml(t.data_dir || t.id)}</div>
+        <div class="cfg-chips">
+          <span class="cfg-chip">GPT Image 2</span>
+          <span class="cfg-chip">${t.references.length} 张参考图</span>
+          <span class="cfg-chip">${t.candidates} 候选</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="secondary" data-action="anchor-edit">编辑</button>
+        <button data-action="anchor-start">生成</button>
+        <button class="danger" data-action="anchor-delete" onclick="event.stopPropagation(); confirmDeleteAnchorTask('${escapeAttr(t.id)}')">删除</button>
+      </div>
+    </article>`;
+  };
+
+  // 按 data_dir 分组，复用视频「已保存任务」的 task-group 层级（分组头 + 折叠/展开 + body）
+  const groups = new Map();
+  for (const t of all) {
+    const dir = t.data_dir || '未分组';
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(t);
+  }
+  const dirs = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+
+  const collapsed = _anchorCollapsed();
+  const html = dirs
+    .map((dir) => {
+      const tasks = groups.get(dir);
+      const isCollapsed = collapsed.has(dir);
+      const head = `<button type="button" class="task-group-head" onclick="toggleAnchorTaskGroup('${escapeAttr(dir)}')" title="${isCollapsed ? '展开' : '折叠'}该文件夹的任务">
+        <span class="group-caret${isCollapsed ? '' : ' open'}">▸</span>
+        <span class="group-name">📁 ${escapeHtml(dir)}</span>
+        <span class="group-count">${tasks.length} 个任务</span>
+      </button>`;
+      const body = isCollapsed
+        ? ''
+        : `<div class="task-group-body">${tasks.map(card).join('')}</div>`;
+      return `<section class="task-group" data-dir="${escapeAttr(dir)}">${head}${body}</section>`;
+    })
     .join('');
   list.innerHTML = html || renderEmptyState('🧩', '还没有 Anchor 任务', '使用表单生成候选图片后可设为 Anchor');
 }
@@ -824,19 +875,22 @@ function anchorRunCard(r) {
   const percent = r.total ? Math.round(((r.completed || 0) / r.total) * 100) : r.status === 'completed' ? 100 : 0;
   const isRunning = ['queued', 'running'].includes(r.status);
   const canReview = r.manifest || r.status === 'running';
-  const resumeBtn = r.can_resume ? `<button class="run-resume" onclick="event.stopPropagation(); resumeAnchorRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
-  return `<article class="run-card${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openAnchorRunReview('${escapeAttr(r.run_id)}')"` : ''}>
-    <div class="run-main">
+  const resumeBtn = r.can_resume ? `<button class="secondary" data-action="run-resume" onclick="event.stopPropagation(); resumeAnchorRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
+  const deleteBtn = `<button class="danger" data-action="run-delete" onclick="event.stopPropagation(); confirmDeleteRun('${escapeAttr(r.run_id)}', this)" title="${isRunning ? '运行中无法删除' : '删除此记录'}" ${isRunning ? 'disabled' : ''}>删除</button>`;
+  return `<article class="task anchor-run${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openAnchorRunReview('${escapeAttr(r.run_id)}')"` : ''}>
+    <div class="task-info">
       <h3>${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
       <div class="meta">${r.run_id} · ${escapeHtml(r.message || '')}</div>
-      <div class="progress"><i style="width:${percent}%"></i></div>
-    </div>
-    <div class="run-right">
-      <strong>${r.completed || 0}/${r.total || 0}</strong>
       ${r.error ? `<div class="meta">${escapeHtml(r.error)}</div>` : ''}
-      ${resumeBtn}
+      <div class="cfg-chips">
+        <span class="cfg-chip">${r.completed || 0}/${r.total || 0}</span>
+        <div class="progress" style="flex:1;min-width:200px;margin-top:0"><i style="width:${percent}%"></i></div>
+      </div>
     </div>
-    <button class="run-delete" data-action="run-delete" onclick="event.stopPropagation(); confirmDeleteRun('${escapeAttr(r.run_id)}', this)" title="${isRunning ? '运行中无法删除' : '删除此记录'}" ${isRunning ? 'disabled' : ''}>✕</button>
+    <div class="actions">
+      ${resumeBtn}
+      ${deleteBtn}
+    </div>
   </article>`;
 }
 
