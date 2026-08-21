@@ -3,7 +3,7 @@
 
 import store from './state.js';
 import { api, post, uploadFile, copyAssetFile, extractTaskAudio, extractAudioByPath, getLyricsTimestamps, saveLyricsTimestamps } from './api.js';
-import { $, $$, toast, showErrorModal, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState } from './utils.js';
+import { $, $$, toast, showErrorModal, escapeHtml, escapeAttr, formatBytes, modeName, stageName, lines, renderEmptyState, renderGroupedRuns } from './utils.js';
 
 // ── Task Folder Relative Path ───────────────────────────────────────────────
 
@@ -2316,22 +2316,50 @@ export async function loadRuns() {
   const sig = JSON.stringify(store.runs.map((r) => [r.run_id, r.status, r.stage, r.completed, r.total, r.message]));
   if (sig === store._runsSig) return;
   store._runsSig = sig;
-  const list = $('#run-list');
-  if (!list) return;
-  list.innerHTML = store.runs.map(runCard).join('') || renderEmptyState('🚀', '还没有运行记录', '配置并启动一个任务后即可看到进度');
+  _renderRuns();
   refreshReviewOptions();
 }
+
+// 仅按当前折叠状态重渲染运行列表（不重新拉取数据）
+function _renderRuns() {
+  const list = $('#run-list');
+  if (!list) return;
+  renderGroupedRuns(
+    list,
+    store.runs,
+    runCard,
+    (r) => (r.task_id || '').split('__')[0] || '未分组',
+    renderEmptyState('🚀', '还没有运行记录', '配置并启动一个任务后即可看到进度'),
+    store.runSort,
+  );
+  _updateRunSortButtons();
+}
+
+export function toggleRunSort(mode) {
+  store.runSort = mode;
+  _renderRuns();
+}
+
+function _updateRunSortButtons() {
+  const group = $('#run-sort-group');
+  if (group) {
+    group.querySelectorAll('.sort-toggle').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.sort === store.runSort);
+    });
+  }
+}
+
+window.addEventListener('runs:toggle', () => _renderRuns());
 
 function runCard(r) {
   const percent = r.total ? Math.round(((r.completed || 0) / r.total) * 100) : r.status === 'completed' ? 100 : 0;
   const isRunning = ['queued', 'running'].includes(r.status);
   const canReview = r.manifest || r.status === 'running';
   const resumeBtn = r.can_resume ? `<button class="run-resume" onclick="event.stopPropagation(); resumeRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
-  // 文件夹标识：不同文件夹下的同名任务（如 街道风/冻结 与 冻结/冻结）在运行列表也能区分
-  const dir = (r.task_id || '').split('__')[0] || '';
+  // 文件夹归属由外层 .task-group 分组头统一展示，卡片标题不再重复 📁 标识
   return `<article class="run-card${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openRunReview('${escapeAttr(r.run_id)}')"` : ''}>
     <div class="run-main">
-      <h3>${dir ? `<span class="run-dir">📁 ${escapeHtml(dir)}</span>` : ''}${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
+      <h3>${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
       <div class="meta">${r.run_id} · ${escapeHtml(r.message || '')}</div>
       <div class="progress"><i style="width:${percent}%"></i></div>
     </div>

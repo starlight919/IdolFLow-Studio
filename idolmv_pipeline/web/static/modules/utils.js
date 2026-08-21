@@ -182,3 +182,95 @@ export function renderEmptyState(icon, message, hint = '') {
     '</div>',
   ].join('');
 }
+
+// ── 运行记录按 data_dir 折叠分组（与「已保存任务」共享 .task-group 层级）──
+const RUNS_COLLAPSED_KEY = 'runs-collapsed-folders';
+let _runsCollapsed = null;
+function _runsCollapsedSet() {
+  if (!_runsCollapsed) {
+    try {
+      _runsCollapsed = new Set(JSON.parse(localStorage.getItem(RUNS_COLLAPSED_KEY) || '[]'));
+    } catch {
+      _runsCollapsed = new Set();
+    }
+  }
+  return _runsCollapsed;
+}
+
+// 解析 run 的 created_at（ISO 字符串或秒级时间戳）→ 毫秒时间戳；无效兜底 0
+function _runTimeMs(t) {
+  if (t == null) return 0;
+  if (typeof t === 'number') return t * (t < 1e12 ? 1000 : 1);
+  const ms = Date.parse(t);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+// 通用排序比较器：与「已保存任务」一致的时间/名字四种模式
+// a、b 为任意对象；keyTime 取时间字段，keyName 取名字字段
+function _sortCmp(a, b, mode, keyTime, keyName) {
+  switch (mode) {
+    case 'name-asc': return String(keyName(a)).localeCompare(String(keyName(b)), 'zh-Hans-CN');
+    case 'name-desc': return String(keyName(b)).localeCompare(String(keyName(a)), 'zh-Hans-CN');
+    case 'time-asc': return (keyTime(a) || 0) - (keyTime(b) || 0);
+    default: return (keyTime(b) || 0) - (keyTime(a) || 0); // time-desc
+  }
+}
+
+/**
+ * 把运行记录列表按 data_dir 折叠分组渲染到 container，并支持排序。
+ * - runs: 运行记录数组
+ * - cardFn: (run) => HTML 字符串（单个卡片）
+ * - dirOf: (run) => 所属 data_dir 字符串
+ * - empty: 无记录时的空状态 HTML
+ * - sortMode: 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
+ * - timeOf: (run) => 时间字段（ISO 字符串或时间戳）
+ * 排序规则：组内按 sortMode 排；组间——时间模式按组内最新时间，名字模式按文件夹名。
+ */
+export function renderGroupedRuns(container, runs, cardFn, dirOf, empty, sortMode = 'time-desc', timeOf = (r) => r.created_at) {
+  if (!container) return;
+  if (!runs || !runs.length) {
+    container.innerHTML = empty || '';
+    return;
+  }
+  const groups = new Map();
+  for (const r of runs) {
+    const dir = dirOf(r) || '未分组';
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(r);
+  }
+  // 组内排序
+  for (const items of groups.values()) {
+    items.sort((a, b) => _sortCmp(a, b, sortMode, timeOf, (r) => r.task_name || r.run_id || ''));
+  }
+  // 组间排序：时间模式按组内最新时间，名字模式按文件夹名
+  const dirs = [...groups.keys()].sort((a, b) => {
+    if (sortMode === 'name-asc') return a.localeCompare(b, 'zh-Hans-CN');
+    if (sortMode === 'name-desc') return b.localeCompare(a, 'zh-Hans-CN');
+    const ta = Math.max(...groups.get(a).map(timeOf).map(_runTimeMs));
+    const tb = Math.max(...groups.get(b).map(timeOf).map(_runTimeMs));
+    return tb - ta; // 时间模式：最新活动的文件夹在前
+  });
+  const collapsed = _runsCollapsedSet();
+  container.innerHTML = dirs
+    .map((dir) => {
+      const items = groups.get(dir);
+      const isCollapsed = collapsed.has(dir);
+      const head = `<button type="button" class="task-group-head" onclick="toggleRunGroup('${escapeAttr(dir)}')" title="${isCollapsed ? '展开' : '折叠'}该文件夹的运行记录">
+        <span class="group-caret${isCollapsed ? '' : ' open'}">▸</span>
+        <span class="group-name">📁 ${escapeHtml(dir)}</span>
+        <span class="group-count">${items.length} 个运行</span>
+      </button>`;
+      const body = isCollapsed ? '' : `<div class="task-group-body">${items.map(cardFn).join('')}</div>`;
+      return `<section class="task-group" data-dir="${escapeAttr(dir)}">${head}${body}</section>`;
+    })
+    .join('');
+}
+
+export function toggleRunGroup(dir) {
+  const set = _runsCollapsedSet();
+  if (set.has(dir)) set.delete(dir); else set.add(dir);
+  try { localStorage.setItem(RUNS_COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+  // 通知调用方重渲染（不重新拉取数据，仅按新折叠状态更新 DOM）
+  window.dispatchEvent(new CustomEvent('runs:toggle', { detail: { dir } }));
+}
+window.toggleRunGroup = toggleRunGroup;

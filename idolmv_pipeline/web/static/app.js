@@ -20,6 +20,7 @@ import {
   toggleRefAspectBinding, updateAnchorNote, deleteAnchorTask, recoverAnchorTask,
   renderAnchorQualityPresets, renderAnchorNegativePresets,
   loadAnchorReview,
+  toggleAnchorRunSort,
   // Review
 } from './modules/anchor.js';
 import {
@@ -29,7 +30,7 @@ import {
   markAsManuallyEdited, saveTask, loadTasks, editTask, resetForm, showAssets, toggleTaskSort,
   onCustomAnchorRoleChange, setCustomAnchorRole, resetCustomAnchorRole,
   closeAssets, previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart, toggleTaskGroup,
-  loadRuns, openRunPoll,
+  loadRuns, openRunPoll, toggleRunSort,
   openLyricsTimestampsEditor, closeLyricsTimestampsEditor, addTimestamp, resetTimestamps,
   saveLyricsTimestampsFromModal, previewLyricsTimestamps, onLyricsTimestampsKey, showLyricsShortcuts,
   removeVideoAsset, initCustomPromptTemplates, applyCustomPromptTemplate,
@@ -373,14 +374,14 @@ Object.assign(window, {
   saveTask, loadTasks, editTask, resetForm, showAssets, closeAssets, toggleTaskSort,
   confirmDeleteRun, confirmDeleteTask, confirmDeleteAnchorTask, closeDeleteModal, confirmDeleteAction, showDeleteConfirm,
   previewPrompt, closePromptPreview, markPromptEdited, resetPromptToAuto, requestStart, startCurrent, closeModal, confirmStart,
-  loadRuns, openRunPoll,
+  loadRuns, openRunPoll, toggleRunSort,
   openLyricsTimestampsEditor, showLyricsShortcuts,
   // Lightbox
   closeImageLightbox,
   // Anchor
   renderAnchorReferences, saveAnchorTask, resetAnchorForm, previewAnchorPrompt, closeAnchorPromptPreview,
   requestAnchorStart, loadAnchorTasks, editAnchorTask,
-  loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch,
+  loadAnchorRuns, openAnchorPoll, regenerateAnchorBatch, toggleAnchorRunSort,
   promoteAnchor, useAnchorAsReference, toggleAnchorTaskSort,
   pickAnchorReferences, openInlineAnchor, openAnchorFolderPicker, setAnchorSource, setCustomAnchorSource, autoFillAnchorFields,
   removeAnchorReference, syncAspectSourceDropdowns, toggleAnchorWatermark,

@@ -15,6 +15,7 @@ const store = {
   pendingTask: null,
   pendingLyricsTimestamps: null,
   taskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
+  runSort: 'time-desc',  // 运行记录的排序模式（与 taskSort 一致）
   customPromptDirty: false,  // 预览 Prompt 是否被用户手动编辑过（true=自定义）
   // 自由定制：参考图（customReferences）由素材弹窗维护；参考音视频（customRefs）由带标签的专属选择器维护
   customReferences: [],  // [{ file }] —— 参考图，复用打开素材入口
@@ -46,6 +47,7 @@ const store = {
   anchorPickerMode: false,
   currentAnchorTask: null,
   anchorTaskSort: 'time-desc',  // 'time-desc' | 'time-asc' | 'name-asc' | 'name-desc'
+  anchorRunSort: 'time-desc',  // Anchor 运行记录的排序模式
 
   // ========== Review ==========
   reviewManifest: null,

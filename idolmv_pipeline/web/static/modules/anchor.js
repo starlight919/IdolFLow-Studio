@@ -6,7 +6,7 @@
 
 import store from './state.js';
 import { api, post } from './api.js';
-import { $, $$, toast, escapeHtml, escapeAttr, delay, renderEmptyState, stageName } from './utils.js';
+import { $, $$, toast, escapeHtml, escapeAttr, delay, renderEmptyState, renderGroupedRuns, stageName } from './utils.js';
 
 // ── Extracted helpers ──────────────────────────────────────────────────────
 
@@ -695,18 +695,18 @@ function _renderAnchorTaskList() {
   // 单卡片渲染（与视频「已保存任务」同构）
   const card = (t) => {
     if (t._orphan) {
-      return `<article class="task" data-id="${escapeHtml(t.id)}">
-        <div class="task-info">
+      return `<article class="task anchor-task" data-id="${escapeHtml(t.id)}">
+        <div class="task-main">
           <h3>${escapeHtml(t.name)}</h3>
           <div class="meta">配置已丢失 · ${t._refCount} 张参考图 · ${t._refFiles.map((f) => escapeHtml(f)).join(', ')}</div>
         </div>
-        <div class="actions">
+        <div class="task-actions">
           <button class="secondary" onclick="recoverAnchorTask('${escapeAttr(t.id)}')">恢复</button>
         </div>
       </article>`;
     }
-    return `<article class="task" data-id="${escapeHtml(t.id)}">
-      <div class="task-info">
+    return `<article class="task anchor-task" data-id="${escapeHtml(t.id)}">
+      <div class="task-main">
         <h3>${escapeHtml(t.name)}</h3>
         <div class="meta">${escapeHtml(t.data_dir || t.id)}</div>
         <div class="cfg-chips">
@@ -715,11 +715,11 @@ function _renderAnchorTaskList() {
           <span class="cfg-chip">${t.candidates} 候选</span>
         </div>
       </div>
-      <div class="actions">
+      <div class="task-actions">
         <button class="secondary" data-action="anchor-edit">编辑</button>
         <button data-action="anchor-start">生成</button>
-        <button class="danger" data-action="anchor-delete" onclick="event.stopPropagation(); confirmDeleteAnchorTask('${escapeAttr(t.id)}')">删除</button>
       </div>
+      <button class="task-delete" onclick="event.stopPropagation(); confirmDeleteAnchorTask('${escapeAttr(t.id)}')" title="删除此任务">✕</button>
     </article>`;
   };
 
@@ -730,7 +730,14 @@ function _renderAnchorTaskList() {
     if (!groups.has(dir)) groups.set(dir, []);
     groups.get(dir).push(t);
   }
-  const dirs = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  // 组间排序：与组内保持一致——时间模式按组内最新 mtime，名字模式按文件夹名
+  const dirs = [...groups.keys()].sort((a, b) => {
+    if (store.anchorTaskSort === 'name-asc') return a.localeCompare(b, 'zh-Hans-CN');
+    if (store.anchorTaskSort === 'name-desc') return b.localeCompare(a, 'zh-Hans-CN');
+    const ta = Math.max(...groups.get(a).map((t) => t.mtime || 0));
+    const tb = Math.max(...groups.get(b).map((t) => t.mtime || 0));
+    return tb - ta; // 时间模式：最新编辑的文件夹在前
+  });
 
   const collapsed = _anchorCollapsed();
   const html = dirs
@@ -846,14 +853,7 @@ export async function deleteAnchorTask(id) {
 
 export async function loadAnchorRuns() {
   store.anchorRuns = await api('/api/anchor-runs');
-
-  // ── Render progress cards (all runs including queued/running) ──
-  const list = $('#anchor-run-list');
-  if (list) {
-    list.innerHTML = store.anchorRuns.length
-      ? store.anchorRuns.map(anchorRunCard).join('')
-      : renderEmptyState('🖼️', '还没有 Anchor 运行记录', '提交 Anchor 任务后将在此显示进度');
-  }
+  _renderAnchorRuns();
 
   // ── Populate review dropdown (runs with manifest + running/queued，便于查看生成状态) ──
   const select = $('#anchor-review-run');
@@ -871,26 +871,54 @@ export async function loadAnchorRuns() {
   if (select.value && anchorReviewLoadingId !== select.value) loadAnchorReview(select.value);
 }
 
+// 仅按当前折叠状态重渲染 Anchor 运行列表（不重新拉取数据）
+function _renderAnchorRuns() {
+  const list = $('#anchor-run-list');
+  if (!list) return;
+  renderGroupedRuns(
+    list,
+    store.anchorRuns,
+    anchorRunCard,
+    (r) => r.task_id || '未分组', // Anchor 的 task_id 即为 data_dir
+    renderEmptyState('🖼️', '还没有 Anchor 运行记录', '提交 Anchor 任务后将在此显示进度'),
+    store.anchorRunSort,
+  );
+  _updateAnchorRunSortButtons();
+}
+
+export function toggleAnchorRunSort(mode) {
+  store.anchorRunSort = mode;
+  _renderAnchorRuns();
+}
+
+function _updateAnchorRunSortButtons() {
+  const group = $('#anchor-run-sort-group');
+  if (group) {
+    group.querySelectorAll('.sort-toggle').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.sort === store.anchorRunSort);
+    });
+  }
+}
+
+window.addEventListener('runs:toggle', () => _renderAnchorRuns());
+
 function anchorRunCard(r) {
   const percent = r.total ? Math.round(((r.completed || 0) / r.total) * 100) : r.status === 'completed' ? 100 : 0;
   const isRunning = ['queued', 'running'].includes(r.status);
   const canReview = r.manifest || r.status === 'running';
-  const resumeBtn = r.can_resume ? `<button class="secondary" data-action="run-resume" onclick="event.stopPropagation(); resumeAnchorRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
-  const deleteBtn = `<button class="danger" data-action="run-delete" onclick="event.stopPropagation(); confirmDeleteRun('${escapeAttr(r.run_id)}', this)" title="${isRunning ? '运行中无法删除' : '删除此记录'}" ${isRunning ? 'disabled' : ''}>删除</button>`;
-  return `<article class="task anchor-run${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openAnchorRunReview('${escapeAttr(r.run_id)}')"` : ''}>
-    <div class="task-info">
+  const resumeBtn = r.can_resume ? `<button class="run-resume" onclick="event.stopPropagation(); resumeAnchorRun('${escapeAttr(r.run_id)}')" title="重新恢复轮询">↻ 恢复</button>` : '';
+  return `<article class="run-card anchor-run${canReview ? ' clickable' : ''}" data-id="${escapeHtml(r.run_id)}"${canReview ? ` onclick="openAnchorRunReview('${escapeAttr(r.run_id)}')"` : ''}>
+    <div class="run-main">
       <h3>${escapeHtml(r.task_name)} <span class="badge">${stageName(r.stage)}</span></h3>
       <div class="meta">${r.run_id} · ${escapeHtml(r.message || '')}</div>
+      <div class="progress"><i style="width:${percent}%"></i></div>
+    </div>
+    <div class="run-right">
+      <strong>${r.completed || 0}/${r.total || 0}</strong>
       ${r.error ? `<div class="meta">${escapeHtml(r.error)}</div>` : ''}
-      <div class="cfg-chips">
-        <span class="cfg-chip">${r.completed || 0}/${r.total || 0}</span>
-        <div class="progress" style="flex:1;min-width:200px;margin-top:0"><i style="width:${percent}%"></i></div>
-      </div>
-    </div>
-    <div class="actions">
       ${resumeBtn}
-      ${deleteBtn}
     </div>
+    <button class="run-delete" onclick="event.stopPropagation(); confirmDeleteRun('${escapeAttr(r.run_id)}', this)" title="${isRunning ? '运行中无法删除' : '删除此记录'}" ${isRunning ? 'disabled' : ''}>✕</button>
   </article>`;
 }
 
